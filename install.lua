@@ -20,7 +20,7 @@
 -- EDIT THESE
 -- ============================================================
 local GITHUB = {
-    user   = "YOUR_USERNAME_HERE",
+    user   = "Chillphix",
     repo   = "ctn-facility",
     branch = "main",
 }
