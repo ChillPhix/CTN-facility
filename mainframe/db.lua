@@ -1,0 +1,567 @@
+-- mainframe/db.lua
+-- Persistent database for CTN mainframe.
+-- Stores: personnel, disks, doors, zones, passcodes, logs.
+
+local M = {}
+
+M.PATH = "/ctn_db"
+M.LOG_PATH = "/ctn_log"
+M.MAX_LOG_LINES = 5000
+
+-- ============================================================
+-- In-memory schema
+-- ============================================================
+-- personnel[playerName] = {
+--     name = "Bob",
+--     clearance = 4,              -- 0 highest .. 5 lowest
+--     department = "Security",    -- "Security" | "Research" | "MTF" | "Medical" | "Admin" | "Janitor" | "Guest"
+--     flags = { maintenance = true, scp173_access = true },  -- arbitrary perms
+--     status = "active",          -- "active" | "suspended" | "terminated"
+-- }
+--
+-- disks[diskID] = {
+--     owner = "Bob",              -- playerName in personnel
+--     issued = 1234567890,        -- epoch ms
+--     issuedBy = "AdminName",
+--     status = "active",          -- "active" | "revoked" | "lost"
+-- }
+--
+-- doors[doorName] = {
+--     terminalId = 17,            -- computer ID of the door's scanner terminal
+--     zone = "HCZ",
+--     minClearance = 3,           -- must be <= this number
+--     requiredDepartments = nil,  -- nil = any, or {"Security","MTF"}
+--     requiredFlag = nil,         -- nil, or "maintenance"
+-- }
+--
+-- zones[zoneName] = { lockdown = false, alarm = "normal" }
+--
+-- passcodes = { issuer = "1234" }  -- passcode for the card issuer terminal
+--
+-- facility = { state = "normal" } -- "normal" | "caution" | "warning" | "lockdown" | "breach"
+
+local data = {
+    personnel = {},
+    disks     = {},
+    doors     = {},
+    zones     = {
+        Office   = {lockdown=false, alarm="normal", occupants={}},
+        Security = {lockdown=false, alarm="normal", occupants={}},
+        Testing  = {lockdown=false, alarm="normal", occupants={}},
+        LCZ      = {lockdown=false, alarm="normal", occupants={}},
+        HCZ      = {lockdown=false, alarm="normal", occupants={}},
+    },
+    passcodes = { issuer = "0000", control = "0000", admin = "0000" },
+    facility  = { state = "normal" },
+    documents = {},
+
+    -- Pending terminals awaiting admin approval.
+    -- pending[computerID] = {type="door"|"alarm"|"detector", requested_at, hostname}
+    pending   = {},
+
+    -- Alarm/siren nodes registered in the facility.
+    -- alarms[computerID] = {zone = "HCZ"}
+    alarms    = {},
+
+    -- Player detector nodes.
+    -- detectors[computerID] = {zone = "HCZ"}
+    detectors = {},
+
+    -- Active breach / active SCP status.
+    -- breaches[entityId] = {entityId, zone, declared_at, declared_by, active=true}
+    breaches  = {},
+
+    -- Contained entities.
+    -- entities[entityId] = {
+    --   entityId, name, class, zone, status, threat,
+    --   description, procedures, minClearance, last_inspection
+    -- }
+    entities  = {},
+
+    -- Chamber terminals; one per containment cell.
+    -- chambers[computerId] = {entityId, zone}
+    chambers  = {},
+}
+
+-- ============================================================
+-- Persistence
+-- ============================================================
+function M.load()
+    if not fs.exists(M.PATH) then M.save(); return end
+    local f = fs.open(M.PATH, "r")
+    local s = f.readAll()
+    f.close()
+    local loaded = textutils.unserialize(s)
+    if type(loaded) == "table" then
+        -- merge so new fields in code don't break old saves
+        for k, v in pairs(loaded) do data[k] = v end
+    end
+end
+
+function M.save()
+    local f = fs.open(M.PATH, "w")
+    f.write(textutils.serialize(data))
+    f.close()
+end
+
+function M.get() return data end
+
+-- ============================================================
+-- Personnel
+-- ============================================================
+function M.addPerson(name, clearance, department, flags)
+    data.personnel[name] = {
+        name = name,
+        clearance = clearance,
+        department = department,
+        flags = flags or {},
+        status = "active",
+    }
+    M.save()
+end
+
+function M.setClearance(name, clearance)
+    if data.personnel[name] then
+        data.personnel[name].clearance = clearance
+        M.save(); return true
+    end
+    return false
+end
+
+function M.setStatus(name, status)
+    if data.personnel[name] then
+        data.personnel[name].status = status
+        M.save(); return true
+    end
+    return false
+end
+
+function M.setFlag(name, flag, value)
+    if data.personnel[name] then
+        data.personnel[name].flags[flag] = value
+        M.save(); return true
+    end
+    return false
+end
+
+-- ============================================================
+-- Disks (keycards)
+-- ============================================================
+function M.issueDisk(diskID, owner, issuedBy)
+    if not data.personnel[owner] then return false, "unknown_person" end
+    data.disks[diskID] = {
+        owner = owner,
+        issued = os.epoch("utc"),
+        issuedBy = issuedBy or "SYSTEM",
+        status = "active",
+    }
+    M.save()
+    return true
+end
+
+function M.revokeDisk(diskID)
+    if data.disks[diskID] then
+        data.disks[diskID].status = "revoked"
+        M.save(); return true
+    end
+    return false
+end
+
+function M.lookupDisk(diskID)
+    local d = data.disks[diskID]
+    if not d then return nil, "unknown_disk" end
+    if d.status ~= "active" then return nil, d.status end
+    local p = data.personnel[d.owner]
+    if not p then return nil, "no_owner" end
+    if p.status ~= "active" then return nil, "personnel_"..p.status end
+    return p, d
+end
+
+-- ============================================================
+-- Doors
+-- ============================================================
+function M.addDoor(doorName, terminalId, zone, minClearance, opts)
+    opts = opts or {}
+    data.doors[doorName] = {
+        terminalId = terminalId,
+        zone = zone,
+        minClearance = minClearance,
+        requiredDepartments = opts.requiredDepartments,
+        requiredFlag = opts.requiredFlag,
+        -- live state
+        liveState = "closed",    -- "closed" | "open" | "forced_open" | "forced_closed" | "offline"
+        lastSeen = 0,            -- epoch ms of last heartbeat from terminal
+        lastUser = nil,          -- name of last person who scanned
+        lastAction = nil,        -- "granted" | "denied" | "remote_open" | etc
+    }
+    M.save()
+end
+
+function M.removeDoor(doorName)
+    if data.doors[doorName] then
+        data.doors[doorName] = nil
+        M.save(); return true
+    end
+    return false
+end
+
+function M.updateDoorState(terminalId, state, meta)
+    for _, d in pairs(data.doors) do
+        if d.terminalId == terminalId then
+            d.liveState = state or d.liveState
+            d.lastSeen = os.epoch("utc")
+            if meta then
+                d.lastUser = meta.user or d.lastUser
+                d.lastAction = meta.action or d.lastAction
+            end
+            M.save()
+            return true
+        end
+    end
+    return false
+end
+
+function M.setDoorForced(doorName, forced)
+    -- forced: "open" | "closed" | nil (release)
+    local d = data.doors[doorName]
+    if not d then return false end
+    if forced == "open" then d.liveState = "forced_open"
+    elseif forced == "closed" then d.liveState = "forced_closed"
+    else d.liveState = "closed" end
+    M.save()
+    return true
+end
+
+function M.getDoorByTerminal(terminalId)
+    for name, d in pairs(data.doors) do
+        if d.terminalId == terminalId then return name, d end
+    end
+    return nil
+end
+
+--- Evaluate whether a person can open a door.
+-- @return allowed (bool), reason (string)
+function M.checkAccess(person, door)
+    if data.facility.state == "lockdown" and person.clearance > 2 then
+        return false, "facility_lockdown"
+    end
+    if data.zones[door.zone] and data.zones[door.zone].lockdown and person.clearance > 2 then
+        return false, "zone_lockdown"
+    end
+
+    -- clearance (lower number = higher clearance)
+    if person.clearance > door.minClearance then
+        -- special flag override
+        if door.requiredFlag and person.flags[door.requiredFlag] then
+            return true, "flag_override"
+        end
+        return false, "insufficient_clearance"
+    end
+
+    -- department filter (if specified)
+    if door.requiredDepartments then
+        local ok = false
+        for _, dept in ipairs(door.requiredDepartments) do
+            if person.department == dept then ok = true; break end
+        end
+        if not ok then return false, "wrong_department" end
+    end
+
+    return true, "granted"
+end
+
+-- ============================================================
+-- Facility state / lockdown
+-- ============================================================
+function M.setFacilityState(state)
+    data.facility.state = state
+    M.save()
+end
+
+function M.setZoneLockdown(zone, value)
+    if data.zones[zone] then
+        data.zones[zone].lockdown = value
+        M.save(); return true
+    end
+    return false
+end
+
+-- ============================================================
+-- Documents
+-- ============================================================
+function M.addDocument(id, title, folder, minClearance, body, author)
+    data.documents[id] = {
+        id = id, title = title, folder = folder or "General",
+        minClearance = minClearance, body = body, author = author,
+        created = os.epoch("utc"),
+    }
+    M.save()
+end
+
+function M.listDocuments(clearance)
+    local out = {}
+    for id, doc in pairs(data.documents) do
+        if clearance <= doc.minClearance then
+            out[#out+1] = {id=id, title=doc.title, folder=doc.folder, minClearance=doc.minClearance}
+        end
+    end
+    return out
+end
+
+function M.getDocument(id, clearance)
+    local d = data.documents[id]
+    if not d then return nil, "not_found" end
+    if clearance > d.minClearance then return nil, "insufficient_clearance" end
+    return d
+end
+
+-- ============================================================
+-- Passcodes
+-- ============================================================
+function M.checkPasscode(name, code)
+    return data.passcodes[name] == code
+end
+
+function M.setPasscode(name, code)
+    data.passcodes[name] = code
+    M.save()
+end
+
+-- ============================================================
+-- Logs (append-only, with rotation)
+-- ============================================================
+function M.log(category, message, meta)
+    local line = textutils.serialize({
+        ts = os.epoch("utc"),
+        category = category,
+        message = message,
+        meta = meta or {},
+    }, {compact=true})
+    local mode = fs.exists(M.LOG_PATH) and "a" or "w"
+    local f = fs.open(M.LOG_PATH, mode)
+    f.writeLine(line)
+    f.close()
+end
+
+function M.readLog(n)
+    if not fs.exists(M.LOG_PATH) then return {} end
+    local f = fs.open(M.LOG_PATH, "r")
+    local lines = {}
+    while true do
+        local l = f.readLine()
+        if not l then break end
+        lines[#lines+1] = l
+    end
+    f.close()
+    n = n or 50
+    local out = {}
+    for i = math.max(1, #lines - n + 1), #lines do
+        out[#out+1] = textutils.unserialize(lines[i])
+    end
+    return out
+end
+
+-- ============================================================
+-- Pending terminals (auto-discovery queue)
+-- ============================================================
+function M.addPending(computerId, termType, hostname)
+    data.pending[computerId] = {
+        type = termType,
+        requested_at = os.epoch("utc"),
+        hostname = hostname or "?",
+    }
+    M.save()
+end
+
+function M.removePending(computerId)
+    data.pending[computerId] = nil
+    M.save()
+end
+
+function M.listPending()
+    local out = {}
+    for id, p in pairs(data.pending) do
+        out[#out+1] = {id=id, type=p.type, hostname=p.hostname, requested_at=p.requested_at}
+    end
+    return out
+end
+
+-- ============================================================
+-- Alarm nodes
+-- ============================================================
+function M.addAlarm(computerId, zone)
+    data.alarms[computerId] = {zone=zone}
+    M.save()
+end
+
+function M.getAlarmsInZone(zone)
+    local out = {}
+    for id, a in pairs(data.alarms) do
+        if a.zone == zone then out[#out+1] = id end
+    end
+    return out
+end
+
+function M.allAlarms()
+    local out = {}
+    for id, _ in pairs(data.alarms) do out[#out+1] = id end
+    return out
+end
+
+-- ============================================================
+-- Player detector nodes
+-- ============================================================
+function M.addDetector(computerId, zone)
+    data.detectors[computerId] = {zone=zone}
+    M.save()
+end
+
+function M.getDetectorZone(computerId)
+    local d = data.detectors[computerId]
+    return d and d.zone or nil
+end
+
+-- ============================================================
+-- Zone occupancy (updated by detector reports)
+-- ============================================================
+function M.updateZoneOccupants(zone, playerList)
+    if data.zones[zone] then
+        data.zones[zone].occupants = playerList
+        -- don't save here; occupancy changes too often. Save periodically elsewhere.
+    end
+end
+
+function M.getZoneOccupants(zone)
+    return data.zones[zone] and data.zones[zone].occupants or {}
+end
+
+-- ============================================================
+-- Breaches
+-- ============================================================
+function M.declareBreach(scpId, zone, declaredBy)
+    data.breaches[scpId] = {
+        scpId = scpId, zone = zone,
+        declared_at = os.epoch("utc"),
+        declared_by = declaredBy,
+        active = true,
+    }
+    M.save()
+end
+
+function M.endBreach(scpId)
+    if data.breaches[scpId] then
+        data.breaches[scpId].active = false
+        M.save()
+        return true
+    end
+    return false
+end
+
+function M.activeBreaches()
+    local out = {}
+    for id, b in pairs(data.breaches) do
+        if b.active then out[#out+1] = b end
+    end
+    return out
+end
+
+-- ============================================================
+-- Contained entities
+-- ============================================================
+function M.addEntity(entityId, fields)
+    data.entities[entityId] = {
+        entityId     = entityId,
+        name         = fields.name or "Unknown",
+        class        = fields.class or "Euclid",
+        zone         = fields.zone or "HCZ",
+        status       = fields.status or "contained",
+        threat       = fields.threat or 3,
+        description  = fields.description or "",
+        procedures   = fields.procedures or "",
+        minClearance = fields.minClearance or 4,
+        last_inspection = os.epoch("utc"),
+    }
+    M.save()
+end
+
+function M.updateEntity(entityId, fields)
+    local e = data.entities[entityId]
+    if not e then return false end
+    for k, v in pairs(fields) do
+        if e[k] ~= nil or k == "status" or k == "description" or k == "procedures" or k == "threat" then
+            e[k] = v
+        end
+    end
+    M.save()
+    return true
+end
+
+function M.setEntityStatus(entityId, status)
+    if data.entities[entityId] then
+        data.entities[entityId].status = status
+        M.save()
+        return true
+    end
+    return false
+end
+
+function M.deleteEntity(entityId)
+    if data.entities[entityId] then
+        data.entities[entityId] = nil
+        -- also end any active breach for this entity
+        if data.breaches[entityId] then data.breaches[entityId] = nil end
+        -- unlink any chamber
+        for cid, c in pairs(data.chambers) do
+            if c.entityId == entityId then c.entityId = nil end
+        end
+        M.save()
+        return true
+    end
+    return false
+end
+
+function M.getEntity(entityId)
+    return data.entities[entityId]
+end
+
+function M.listEntities()
+    local out = {}
+    for id, e in pairs(data.entities) do
+        out[#out+1] = {
+            entityId=e.entityId, name=e.name, class=e.class,
+            zone=e.zone, status=e.status, threat=e.threat,
+            minClearance=e.minClearance,
+        }
+    end
+    table.sort(out, function(a,b) return a.entityId < b.entityId end)
+    return out
+end
+
+-- ============================================================
+-- Chamber terminals
+-- ============================================================
+function M.addChamber(computerId, entityId, zone)
+    data.chambers[computerId] = {entityId=entityId, zone=zone}
+    M.save()
+end
+
+function M.getChamber(computerId)
+    return data.chambers[computerId]
+end
+
+function M.getChamberByEntity(entityId)
+    for cid, c in pairs(data.chambers) do
+        if c.entityId == entityId then return cid, c end
+    end
+    return nil
+end
+
+function M.listChambers()
+    local out = {}
+    for cid, c in pairs(data.chambers) do
+        out[#out+1] = {computerId=cid, entityId=c.entityId, zone=c.zone}
+    end
+    return out
+end
+
+return M
