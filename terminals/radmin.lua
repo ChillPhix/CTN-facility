@@ -246,9 +246,9 @@ menu.approvePending = function()
             doorName=doorName, terminalId=p.id, zone=zone,
             minClearance=mc, requiredFlag = flag ~= "" and flag or nil,
         }), "DOOR APPROVED")
-    elseif p.type == "alarm" then
-        local zone = pickFromList("ALARM ZONE", ZONES)
-        showResult(sendAdmin("add_alarm", {terminalId=p.id, zone=zone}), "ALARM APPROVED")
+    elseif p.type == "alarm" or p.type == "siren" then
+        local zone = pickFromList("SIREN ZONE", ZONES)
+        showResult(sendAdmin("add_alarm", {terminalId=p.id, zone=zone}), "SIREN APPROVED")
     elseif p.type == "detector" then
         local zone = pickFromList("DETECTOR ZONE", ZONES)
         showResult(sendAdmin("add_detector", {terminalId=p.id, zone=zone}), "DETECTOR APPROVED")

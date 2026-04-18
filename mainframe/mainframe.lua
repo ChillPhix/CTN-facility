@@ -149,8 +149,11 @@ function handlers.announce(from, payload)
     if data.actions and data.actions[from] then return {ok=true, known=true, kind="action"} end
     if data.pending[from] then return {ok=true, pending=true} end
 
-    db.addPending(from, payload.type, payload.hostname)
-    db.log("admin", "new terminal announced: "..payload.type, {from=from, hostname=payload.hostname})
+    -- Map "siren" to alarm type in the queue (same slot)
+    local pType = payload.type
+    if pType == "siren" then pType = "alarm" end
+    db.addPending(from, pType, payload.hostname)
+    db.log("admin", "new terminal announced: "..pType, {from=from, hostname=payload.hostname})
     return {ok=true, pending=true}
 end
 
@@ -228,14 +231,14 @@ local facilityActions = {}
 facilityActions.zone_lockdown = function(args)
     db.setZoneLockdown(args.zone, true)
     db.log("facility", "zone lockdown ON", {zone=args.zone, by=args.issuedBy})
-    pulseAlarms(args.zone, "pulse")
+    pulseAlarms(args.zone, "lockdown")
     broadcastFacilityAlert()
 end
 
 facilityActions.zone_unlock = function(args)
     db.setZoneLockdown(args.zone, false)
     db.log("facility", "zone lockdown OFF", {zone=args.zone, by=args.issuedBy})
-    pulseAlarms(args.zone, "off")
+    pulseAlarms(args.zone, "allclear")
     broadcastFacilityAlert()
 end
 
@@ -243,9 +246,9 @@ facilityActions.set_state = function(args)
     db.setFacilityState(args.state)
     db.log("facility", "facility state: "..args.state, {by=args.issuedBy})
     if args.state == "breach" or args.state == "lockdown" then
-        pulseAlarms(nil, "pulse")
+        pulseAlarms(nil, "breach")
     elseif args.state == "normal" then
-        pulseAlarms(nil, "off")
+        pulseAlarms(nil, "allclear")
     end
     broadcastFacilityAlert()
 end
@@ -255,10 +258,8 @@ facilityActions.declare_breach = function(args)
     db.log("facility", "BREACH: "..args.scpId.." in "..args.zone, {by=args.issuedBy})
     db.setFacilityState("breach")
     db.setZoneLockdown(args.zone, true)
-    pulseAlarms(nil, "pulse")
-    -- update the entity status too if it exists
+    pulseAlarms(nil, "breach")
     db.setEntityStatus(args.scpId, "breached")
-    -- ping the chamber terminal directly so it shows breach state ASAP
     local cid = db.getChamberByEntity(args.scpId)
     if cid then proto.send(cid, "chamber_alert", {status="breached"}) end
     broadcastFacilityAlert()
@@ -272,7 +273,7 @@ facilityActions.end_breach = function(args)
     if cid then proto.send(cid, "chamber_alert", {status="contained"}) end
     if #db.activeBreaches() == 0 then
         db.setFacilityState("normal")
-        pulseAlarms(nil, "off")
+        pulseAlarms(nil, "allclear")
     end
     broadcastFacilityAlert()
 end
@@ -440,7 +441,7 @@ function handlers.action_command(from, payload)
     elseif payload.action == "security_breach" then
         -- Non-containment threat - hostile/intruder
         db.setFacilityState("warning")
-        pulseAlarms(actionTerm.zone, "pulse")
+        pulseAlarms(actionTerm.zone, "security")
         db.logFrom("facility", ">>> SECURITY BREACH <<< raised by "..person.name, from, meta)
         broadcastFacilityAlert()
         return {ok=true, effect="SECURITY BREACH RAISED"}
@@ -457,7 +458,7 @@ function handlers.action_command(from, payload)
         db.setFacilityState("breach")
         db.setZoneLockdown(ent.zone, true)
         db.setEntityStatus(entityId, "breached")
-        pulseAlarms(nil, "pulse")
+        pulseAlarms(nil, "breach")
         local cid = db.getChamberByEntity(entityId)
         if cid then proto.send(cid, "chamber_alert", {status="breached"}) end
         meta.entity = entityId
@@ -475,7 +476,7 @@ function handlers.action_command(from, payload)
         if cid then proto.send(cid, "chamber_alert", {status="contained"}) end
         if #db.activeBreaches() == 0 then
             db.setFacilityState("normal")
-            pulseAlarms(nil, "off")
+            pulseAlarms(nil, "allclear")
         end
         meta.entity = payload.args.entityId
         db.logFrom("facility", "breach contained: "..payload.args.entityId.." by "..person.name, from, meta)
@@ -485,7 +486,7 @@ function handlers.action_command(from, payload)
     elseif payload.action == "zone_lockdown" then
         local zone = (payload.args and payload.args.zone) or actionTerm.zone
         db.setZoneLockdown(zone, true)
-        pulseAlarms(zone, "pulse")
+        pulseAlarms(zone, "lockdown")
         meta.zone_affected = zone
         db.logFrom("facility", "zone lockdown: "..zone.." by "..person.name, from, meta)
         broadcastFacilityAlert()
@@ -494,7 +495,7 @@ function handlers.action_command(from, payload)
     elseif payload.action == "zone_unlock" then
         local zone = (payload.args and payload.args.zone) or actionTerm.zone
         db.setZoneLockdown(zone, false)
-        pulseAlarms(zone, "off")
+        pulseAlarms(zone, "allclear")
         meta.zone_affected = zone
         db.logFrom("facility", "zone unlock: "..zone.." by "..person.name, from, meta)
         broadcastFacilityAlert()
@@ -502,14 +503,14 @@ function handlers.action_command(from, payload)
 
     elseif payload.action == "facility_lockdown" then
         db.setFacilityState("lockdown")
-        pulseAlarms(nil, "pulse")
+        pulseAlarms(nil, "breach")
         db.logFrom("facility", ">>> FACILITY LOCKDOWN <<< by "..person.name, from, meta)
         broadcastFacilityAlert()
         return {ok=true, effect="FACILITY LOCKDOWN ACTIVE"}
 
     elseif payload.action == "facility_normal" then
         db.setFacilityState("normal")
-        pulseAlarms(nil, "off")
+        pulseAlarms(nil, "allclear")
         db.logFrom("facility", "facility restored to NORMAL by "..person.name, from, meta)
         broadcastFacilityAlert()
         return {ok=true, effect="FACILITY NORMAL"}
@@ -527,7 +528,7 @@ function handlers.panic_button(from, payload)
         return {ok=false, reason="unregistered_terminal"}
     end
     db.setFacilityState("warning")
-    pulseAlarms(actionTerm.zone, "pulse")
+    pulseAlarms(actionTerm.zone, "panic")
     db.logFrom("facility", ">>> PANIC BUTTON <<< at "..actionTerm.zone, from,
         {terminal_label=actionTerm.label, terminal_zone=actionTerm.zone})
     broadcastFacilityAlert()

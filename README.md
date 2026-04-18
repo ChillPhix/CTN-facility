@@ -29,15 +29,21 @@ Features
 Roles / terminal types
 ----------------------
 - mainframe : central server, database, auth
-- door      : ID-card scanner at each door
+- door      : ID-card scanner at each door (lockdown-aware idle)
 - issuer    : passcode-gated card issuance
 - radmin    : remote admin console (does everything locally-managed
               admin does, over the network)
 - control   : control room dashboard + facility commands
-- chamber   : containment chamber terminal (per SCP)
-- alarm     : siren node with redstone output
+              (DirectGPU-powered when available, falls back to monitor/term)
+- chamber   : containment chamber terminal (per SCP, flashes during breach)
+- siren     : speaker-based alarm node. Plays different Minecraft sounds
+              for breach, lockdown, panic, security, etc. Optional
+              redstone out for in-world lights.
 - detector  : player detector reporting zone occupancy
 - archive   : document archive browser
+- action    : facility-wide emergency response terminal. Card-authenticated.
+              Clearance determines available actions. Clickable UI.
+              Optional panic button via redstone input.
 
 
 GETTING IT INTO MINECRAFT

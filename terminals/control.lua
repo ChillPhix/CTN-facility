@@ -44,93 +44,142 @@ local status = {
 }
 
 -- ============================================================
--- Monitor dashboard drawing
+-- Monitor dashboard drawing (DirectGPU or standard monitor)
 -- ============================================================
-local function drawDashboard(t)
-    ui.clear(t)
-    local w, h = t.getSize()
+local gpu = require("ctngpu")
 
-    -- Top banner (yellow bar with facility state color swap when breach/lockdown)
+-- Open the backend once (detects directgpu, then monitor, then term)
+local dashBackend
+local function ensureBackend()
+    if dashBackend then return dashBackend end
+    dashBackend = gpu.openBackend({preferGpu = true})
+    return dashBackend
+end
+
+local function drawDashboard()
+    local be = ensureBackend()
+    if not be then return end
+    local w, h = be:size()
+    local isGpu = be.mode == "gpu"
+
+    -- State colors
     local state = status.facility.state or "normal"
-    local topColor = ({normal=ui.FG, caution=ui.WARN, warning=ui.WARN, lockdown=ui.ERR, breach=ui.ERR})[state] or ui.FG
+    local bannerColor
+    if state == "lockdown" or state == "breach" then bannerColor = gpu.COLORS.err
+    elseif state == "warning" or state == "caution" then bannerColor = gpu.COLORS.warn
+    else bannerColor = gpu.COLORS.fg end
 
-    t.setCursorPos(1, 1); t.setBackgroundColor(topColor); t.setTextColor(ui.BG)
-    t.write(string.rep(" ", w))
-    local title = "C.T.N // FACILITY STATUS: "..string.upper(state)
-    t.setCursorPos(math.max(1, math.floor((w - #title)/2)+1), 1); t.write(title)
-    t.setBackgroundColor(ui.BG); t.setTextColor(ui.FG)
+    be:clear(gpu.COLORS.bg)
 
-    -- Main layout: left half = zones, right half = breaches + log
-    local splitX = math.floor(w / 2)
-
-    -- === ZONES column ===
-    t.setCursorPos(2, 3); t.setTextColor(ui.ACCENT); t.write("== ZONES ==")
-    local zy = 5
-    for _, zname in ipairs(ZONES) do
-        local z = status.zones[zname] or {}
-        local col = z.lockdown and ui.ERR or ui.OK
-        t.setCursorPos(2, zy); t.setTextColor(col); t.write(z.lockdown and "[LOCK] " or "[OPEN] ")
-        t.setTextColor(ui.FG); t.write(zname)
-        local occ = z.occupants and #z.occupants or 0
-        if occ > 0 then
-            t.setTextColor(ui.DIM); t.write("  ["..occ.." personnel]")
-        end
-        zy = zy + 1
-
-        -- List occupants if any
-        if z.occupants and #z.occupants > 0 then
-            for i = 1, math.min(3, #z.occupants) do
-                t.setCursorPos(6, zy); t.setTextColor(ui.DIM); t.write("- "..z.occupants[i])
-                zy = zy + 1
-            end
-            if #z.occupants > 3 then
-                t.setCursorPos(6, zy); t.setTextColor(ui.DIM); t.write("  (+"..(#z.occupants - 3).." more)")
-                zy = zy + 1
-            end
-        end
-        zy = zy + 1
-        if zy > h - 3 then break end
-    end
-
-    -- === BREACHES (top-right) ===
-    t.setCursorPos(splitX + 2, 3); t.setTextColor(ui.ACCENT); t.write("== ACTIVE BREACHES ==")
-    if #status.breaches == 0 then
-        t.setCursorPos(splitX + 2, 5); t.setTextColor(ui.OK); t.write("None. Facility nominal.")
+    -- Top banner
+    if isGpu then
+        be:fillRect(0, 0, w, 28, bannerColor)
+        be:text(10, 6, "C.T.N  //  CONTAINMENT DIVISION", gpu.COLORS.bg, 16, "bold")
+        be:text(w - 200, 6, "STATUS: "..state:upper(), gpu.COLORS.bg, 14, "bold")
+        be:fillRect(0, 28, w, 2, gpu.COLORS.bg)
     else
-        local by = 5
-        for _, b in ipairs(status.breaches) do
-            t.setCursorPos(splitX + 2, by); t.setTextColor(ui.ERR)
-            t.write("!! "..b.scpId.." @ "..b.zone)
-            by = by + 1
-            if by > math.floor(h / 2) then break end
-        end
+        be:fillRect(1, 1, w, 1, bannerColor)
+        local title = "C.T.N  //  STATUS: "..state:upper()
+        be:textBg(math.max(1, math.floor((w - #title)/2)+1), 1, title, gpu.COLORS.bg, bannerColor)
     end
 
-    -- === LOG (bottom-right) ===
-    local ly = math.floor(h / 2) + 2
-    t.setCursorPos(splitX + 2, ly); t.setTextColor(ui.ACCENT); t.write("== RECENT ACTIVITY ==")
-    ly = ly + 2
-    local entries = status.recentLog or {}
-    local start = math.max(1, #entries - (h - ly - 1))
-    for i = start, #entries do
-        if ly >= h - 1 then break end
-        local e = entries[i]
-        if e then
-            local tstr = os.date("%H:%M:%S", (e.ts or 0) / 1000)
-            t.setCursorPos(splitX + 2, ly); t.setTextColor(ui.DIM); t.write(tstr.." ")
-            local c = ({security=ui.ERR, access=ui.WARN, admin=ui.OK, facility=ui.ACCENT})[e.category] or ui.FG
-            t.setTextColor(c)
-            local msg = tostring(e.message or ""):sub(1, w - splitX - 15)
-            t.write(msg)
-            ly = ly + 1
+    -- Layout: 4 panels in a 2x2 grid (or simpler for small screens)
+    -- GPU dimensions are pixels; monitor dimensions are chars. Different layouts.
+    if isGpu then
+        local pad = 6
+        local topY = 34
+        local halfW = math.floor((w - pad * 3) / 2)
+        local halfH = math.floor((h - topY - pad * 2) / 2) - 4
+
+        -- Panel 1: Zones (top-left)
+        local p1 = gpu.panel(be, pad, topY, halfW, halfH, "ZONE STATUS", "normal")
+        local zy = p1.contentY
+        for _, zname in ipairs(ZONES) do
+            local z = status.zones[zname] or {}
+            local st = z.lockdown and "err" or "ok"
+            gpu.led(be, p1.x + 8, zy, nil, st)
+            be:text(p1.x + 28, zy + 2, zname, gpu.COLORS.fg, 12, "bold")
+            local statusText = z.lockdown and "[LOCKDOWN]" or "[NORMAL]"
+            local stCol = z.lockdown and gpu.COLORS.err or gpu.COLORS.ok
+            be:text(p1.x + 110, zy + 2, statusText, stCol, 11, "bold")
+            local occ = z.occupants and #z.occupants or 0
+            be:text(p1.x + 220, zy + 2, occ.." in zone", gpu.COLORS.dim, 10, "plain")
+            zy = zy + 18
         end
+
+        -- Panel 2: Active Breaches (top-right)
+        local p2 = gpu.panel(be, pad*2 + halfW, topY, halfW, halfH, "ACTIVE BREACHES",
+            (#status.breaches > 0) and "err" or "ok")
+        if #status.breaches == 0 then
+            be:text(p2.x + 12, p2.contentY + 8, "Facility nominal.", gpu.COLORS.ok, 14, "bold")
+            be:text(p2.x + 12, p2.contentY + 28, "No active containment breaches.", gpu.COLORS.dim, 10, "plain")
+        else
+            local by = p2.contentY
+            for _, b in ipairs(status.breaches) do
+                gpu.led(be, p2.x + 8, by, nil, "err")
+                be:text(p2.x + 28, by + 2, b.scpId, gpu.COLORS.err, 14, "bold")
+                be:text(p2.x + 120, by + 2, "@ "..b.zone, gpu.COLORS.warn, 11, "plain")
+                by = by + 18
+                if by > p2.contentY + p2.contentH - 12 then break end
+            end
+        end
+
+        -- Panel 3: Activity log (bottom-left, wider)
+        local logW = halfW * 2 + pad
+        local logY = topY + halfH + pad
+        local p3 = gpu.panel(be, pad, logY, logW, halfH, "SECURITY AUDIT LOG", "normal")
+        gpu.logList(be, p3.x + 4, p3.contentY, p3.w - 8, p3.contentH, status.recentLog or {})
+
+        -- Bottom strip: timestamp, identity
+        be:text(pad, h - 14, "CONTROL ROOM  //  "..os.date("%Y-%m-%d %H:%M:%S"), gpu.COLORS.dim, 10, "plain")
+        be:text(w - 200, h - 14, "OPERATOR: "..(session.username or "---"), gpu.COLORS.dim, 10, "plain")
+    else
+        -- Char-cell monitor layout
+        local topY = 3
+        local splitX = math.floor(w / 2)
+        local panelH = math.floor((h - topY - 2) / 2)
+
+        -- Zones panel
+        local p1 = gpu.panel(be, 1, topY, splitX, panelH, "ZONE STATUS", "normal")
+        local zy = p1.contentY
+        for _, zname in ipairs(ZONES) do
+            if zy > p1.y + p1.h - 2 then break end
+            local z = status.zones[zname] or {}
+            local stCol = z.lockdown and gpu.COLORS.err or gpu.COLORS.ok
+            be:textBg(p1.x + 2, zy, " ", gpu.COLORS.bg, stCol)
+            be:text(p1.x + 4, zy, zname, gpu.COLORS.fg)
+            local txt = z.lockdown and " [LOCKDOWN]" or " [normal]"
+            be:text(p1.x + 15, zy, txt, stCol)
+            local occ = z.occupants and #z.occupants or 0
+            be:text(p1.x + 28, zy, "("..occ..")", gpu.COLORS.dim)
+            zy = zy + 1
+        end
+
+        -- Breaches panel
+        local p2 = gpu.panel(be, splitX + 1, topY, w - splitX, panelH, "BREACHES",
+            (#status.breaches > 0) and "err" or "ok")
+        if #status.breaches == 0 then
+            be:text(p2.x + 2, p2.contentY, "No active breaches.", gpu.COLORS.ok)
+        else
+            local by = p2.contentY
+            for _, b in ipairs(status.breaches) do
+                if by > p2.y + p2.h - 2 then break end
+                be:text(p2.x + 2, by, "!! "..b.scpId.." @ "..b.zone, gpu.COLORS.err)
+                by = by + 1
+            end
+        end
+
+        -- Log panel (full width, bottom)
+        local p3 = gpu.panel(be, 1, topY + panelH, w, h - topY - panelH - 1,
+            "SECURITY AUDIT LOG", "normal")
+        gpu.logList(be, p3.x + 2, p3.contentY, p3.w - 4, p3.contentH, status.recentLog or {})
+
+        -- Footer
+        be:fillRect(1, h, w, 1, gpu.COLORS.fg)
+        be:textBg(2, h, "CONTROL ROOM  //  "..os.date("%H:%M:%S"), gpu.COLORS.bg, gpu.COLORS.fg)
     end
 
-    -- Footer
-    t.setCursorPos(1, h); t.setBackgroundColor(ui.FG); t.setTextColor(ui.BG)
-    t.write(string.rep(" ", w))
-    t.setCursorPos(2, h); t.write("CONTROL ROOM  " .. os.date("%H:%M:%S"))
-    t.setBackgroundColor(ui.BG); t.setTextColor(ui.FG)
+    be:update()
 end
 
 -- ============================================================
@@ -386,7 +435,7 @@ end
 
 local function dashboardLoop()
     while true do
-        if monitor then pcall(drawDashboard, monitor) end
+        pcall(drawDashboard)
         sleep(1)
     end
 end

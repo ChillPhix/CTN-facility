@@ -186,9 +186,123 @@ local function drawChamber(t)
     ui.footer(t, e.entityId.." // "..(state.chamber and state.chamber.zone or "?"))
 end
 
+-- Try to use DirectGPU if available, for fancier chamber display on large monitors
+local gpu = require("ctngpu")
+local gpuBackend
+local function ensureGpuBackend()
+    if gpuBackend ~= nil then return gpuBackend end
+    -- Try once; if no directgpu, remember that we failed so we don't retry constantly
+    local g = peripheral.find("directgpu")
+    if g then
+        local ok, display = pcall(g.autoDetectAndCreateDisplay)
+        if ok and display then
+            gpuBackend = gpu.gpuBackend(g, display)
+            return gpuBackend
+        end
+    end
+    gpuBackend = false
+    return false
+end
+
+local function drawChamberGpu(be)
+    be:clear(gpu.COLORS.bg)
+    local w, h = be:size()
+
+    -- Banner
+    local bannerColor = state.breachFlash and gpu.COLORS.err or gpu.COLORS.fg
+    be:fillRect(0, 0, w, 28, bannerColor)
+    local title = state.breachFlash and ">>> CONTAINMENT BREACH <<<" or "C.T.N CONTAINMENT CHAMBER"
+    be:text(math.floor(w/2 - #title * 5), 6, title, gpu.COLORS.bg, 16, "bold")
+
+    if state.error then
+        gpu.panel(be, 20, 50, w - 40, 80, "NOT CONFIGURED", "warn")
+        be:text(30, 80, state.error, gpu.COLORS.warn, 12, "plain")
+        be:update(); return
+    end
+
+    if not state.entity then
+        gpu.panel(be, 20, 50, w - 40, 80, "NO ENTITY ASSIGNED", "warn")
+        be:text(30, 80, "Awaiting configuration from mainframe.", gpu.COLORS.dim, 11, "plain")
+        be:update(); return
+    end
+
+    local e = state.entity
+    local classColor = ({
+        Safe=gpu.COLORS.ok, Euclid=gpu.COLORS.warn, Keter=gpu.COLORS.err,
+        Thaumiel=gpu.COLORS.accent2, Apollyon=gpu.COLORS.purple,
+    })[e.class] or gpu.COLORS.fg
+
+    -- Designation panel
+    local p1 = gpu.panel(be, 20, 40, math.floor(w/2) - 30, 100, "DESIGNATION", "normal")
+    be:text(p1.x + 12, p1.contentY + 8, e.entityId, gpu.COLORS.fg, 36, "bold")
+    be:text(p1.x + 12, p1.contentY + 50, e.name, gpu.COLORS.accent, 14, "plain")
+
+    -- Class/Threat panel
+    local p2 = gpu.panel(be, math.floor(w/2) + 10, 40, math.floor(w/2) - 30, 100, "OBJECT CLASSIFICATION", "normal")
+    be:text(p2.x + 12, p2.contentY + 8, string.upper(e.class), classColor, 26, "bold")
+    be:text(p2.x + 12, p2.contentY + 50, "Threat Level", gpu.COLORS.dim, 10, "plain")
+    gpu.bar(be, p2.x + 12, p2.contentY + 62, p2.w - 24, 12, (e.threat or 0) / 5,
+        (e.threat or 0) >= 4 and "err" or ((e.threat or 0) >= 3 and "warn" or "ok"))
+
+    -- Status panel (full width)
+    local stColor, stState
+    if state.status == "breached" then stColor=gpu.COLORS.err; stState="err"
+    elseif state.status == "testing" or state.status == "maintenance" then stColor=gpu.COLORS.warn; stState="warn"
+    else stColor=gpu.COLORS.ok; stState="ok" end
+
+    local p3 = gpu.panel(be, 20, 150, w - 40, 50, "CURRENT STATUS", stState)
+    be:text(p3.x + 12, p3.contentY + 4, string.upper(state.status or e.status or "contained"), stColor, 20, "bold")
+
+    -- Description panel
+    local p4 = gpu.panel(be, 20, 210, w - 40, 100, "DESCRIPTION", "normal")
+    local desc = e.description or "(no description)"
+    -- crude wrap
+    local maxChars = math.floor((p4.w - 24) / 6)
+    local y = p4.contentY + 4
+    for word in desc:gmatch("%S+") do
+        -- too crude a wrap; just print first line worth
+    end
+    if desc ~= "" then
+        be:text(p4.x + 12, p4.contentY + 8, desc:sub(1, maxChars), gpu.COLORS.fg, 11, "plain")
+        if #desc > maxChars then
+            be:text(p4.x + 12, p4.contentY + 22, desc:sub(maxChars+1, maxChars*2), gpu.COLORS.fg, 11, "plain")
+        end
+    end
+
+    -- Procedures (if card swiped)
+    if state.procedures then
+        local p5 = gpu.panel(be, 20, 320, w - 40, h - 340, "CONTAINMENT PROCEDURES", "normal")
+        be:text(p5.x + 12, p5.contentY + 4,
+            "Viewer: "..(state.viewer and state.viewer.name or "?"), gpu.COLORS.accent, 10, "plain")
+        local py = p5.contentY + 20
+        for line in (state.procedures or ""):gmatch("[^\n]+") do
+            if py > p5.y + p5.h - 16 then break end
+            be:text(p5.x + 12, py, line:sub(1, maxChars), gpu.COLORS.fg, 10, "plain")
+            py = py + 12
+        end
+    elseif state.procedures_denied then
+        gpu.panel(be, 20, 320, w - 40, 40, "ACCESS DENIED", "err")
+        be:text(32, 340, "Insufficient clearance (L"..(state.viewer and state.viewer.clearance or "?")..")",
+            gpu.COLORS.err, 12, "bold")
+    elseif drive then
+        be:text(20, h - 30, "Insert ID card to view containment procedures.", gpu.COLORS.dim, 11, "plain")
+    end
+
+    -- Footer
+    be:text(20, h - 14, e.entityId.." // "..(state.chamber and state.chamber.zone or "?").." // ID#"..os.getComputerID(),
+        gpu.COLORS.dim, 10, "plain")
+
+    be:update()
+end
+
 local function render()
     drawChamber(term.current())
-    if monitor then drawChamber(monitor) end
+    local be = ensureGpuBackend()
+    if be then
+        pcall(drawChamberGpu, be)
+    elseif monitor then
+        drawChamber(monitor)
+    end
 end
 
 -- ============================================================
