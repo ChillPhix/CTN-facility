@@ -35,40 +35,74 @@ end
 
 -- ============================================================
 -- Sound patterns per alert state
--- Each pattern is {interval=seconds, sounds={sound_name, ...}}
+-- Each pattern is {interval=seconds, sounds={{id, volume, pitch}, ...}}
 -- Sounds play in sequence, then pause `interval`, then repeat.
+-- SecurityCraft sounds are preferred where applicable; vanilla fallbacks shown.
+-- Note: if SC isn't installed, the sound just fails silently.
 -- ============================================================
 local PATTERNS = {
     off = nil,
+
+    -- Legacy "pulse" and "steady" kept for backward compat
     pulse = {
         interval = 0.5,
-        sounds = { "block.bell.use" },
+        sounds = { {"securitycraft:pling", 1.0}, {"block.bell.use", 1.0} },
     },
     steady = {
         interval = 1.0,
-        sounds = { "block.beacon.activate" },
+        sounds = { {"block.beacon.activate", 1.0} },
     },
+
+    -- Security alert - SC pling
     security = {
-        interval = 0.4,
-        sounds = { "block.note_block.pling", "block.note_block.pling" },
-    },
-    breach = {
-        -- urgent, overlapping klaxon feel
-        interval = 0.3,
-        sounds = { "entity.wither.spawn", "block.beacon.deactivate" },
-    },
-    lockdown = {
         interval = 0.6,
-        sounds = { "block.anvil.land", "block.note_block.bass" },
+        sounds = { {"securitycraft:pling", 1.0, 1.0}, {"securitycraft:pling", 1.0, 1.2} },
     },
+
+    -- Full containment breach - SC alarm, looping
+    breach = {
+        interval = 0.1,  -- SC alarm is ~2s long, re-trigger quickly
+        sounds = { {"securitycraft:alarm", 1.0, 1.0} },
+    },
+
+    -- Zone or facility lockdown
+    lockdown = {
+        interval = 0.4,
+        sounds = {
+            {"securitycraft:remote_access_sentry", 1.0, 0.8},
+            {"securitycraft:alarm", 0.7, 0.7},
+        },
+    },
+
+    -- Panic button - urgent rapid pings
     panic = {
-        interval = 0.2,
-        sounds = { "block.note_block.pling", "block.note_block.pling", "block.note_block.pling" },
+        interval = 0.15,
+        sounds = {
+            {"securitycraft:pling", 1.0, 1.5},
+            {"securitycraft:pling", 1.0, 1.7},
+            {"securitycraft:pling", 1.0, 1.9},
+        },
     },
+
+    -- All clear - calm chime
     allclear = {
-        -- single play only
         once = true,
-        sounds = { "block.note_block.chime", "block.note_block.chime" },
+        sounds = {
+            {"entity.experience_orb.pickup", 1.0, 1.2},
+            {"securitycraft:pling", 0.7, 1.4},
+        },
+    },
+
+    -- Card swipe / scan (granted)
+    scan_ok = {
+        once = true,
+        sounds = { {"securitycraft:click", 1.0, 1.3}, {"entity.experience_orb.pickup", 0.6, 1.5} },
+    },
+
+    -- Access denied
+    scan_deny = {
+        once = true,
+        sounds = { {"securitycraft:click", 1.0, 0.6}, {"block.note_block.bass", 1.0, 0.5} },
     },
 }
 
@@ -117,7 +151,15 @@ local function playLoop()
         local pat = PATTERNS[state.pattern]
         if pat then
             for _, snd in ipairs(pat.sounds) do
-                pcall(speaker.playSound, snd, VOLUME)
+                -- snd is {id, volume, pitch} table, or legacy plain string
+                if type(snd) == "string" then
+                    pcall(speaker.playSound, snd, VOLUME, 1.0)
+                elseif type(snd) == "table" then
+                    local id = snd[1]
+                    local vol = (snd[2] or 1.0) * (VOLUME / 3)
+                    local pitch = snd[3] or 1.0
+                    pcall(speaker.playSound, id, vol, pitch)
+                end
                 sleep(0.12)
             end
             if RS_SIDE then

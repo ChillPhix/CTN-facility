@@ -152,6 +152,12 @@ function handlers.announce(from, payload)
     -- Map "siren" to alarm type in the queue (same slot)
     local pType = payload.type
     if pType == "siren" then pType = "alarm" end
+
+    -- Widgets are read-only; no approval needed, auto-acknowledge
+    if pType == "widget" then
+        return {ok=true, known=true, kind="widget"}
+    end
+
     db.addPending(from, pType, payload.hostname)
     db.log("admin", "new terminal announced: "..pType, {from=from, hostname=payload.hostname})
     return {ok=true, pending=true}

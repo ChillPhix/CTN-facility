@@ -62,6 +62,7 @@ local ROLES = {
     detector  = role({{src="terminals/detector.lua", dest="/startup.lua"}}),
     archive   = role({{src="terminals/archive.lua",  dest="/startup.lua"}}),
     action    = role({{src="terminals/action.lua",   dest="/startup.lua"}}),
+    widget    = role({{src="terminals/widget.lua",   dest="/startup.lua"}}),
 }
 
 -- ============================================================
@@ -195,6 +196,11 @@ elseif role == "action" then
     print("and a panic button wired to a redstone input side.")
     print("This terminal is card-authenticated: card holder clearance")
     print("determines what actions are shown.")
+elseif role == "widget" then
+    print("Also needs: advanced monitor (any size - great for 1x1 or 1x2).")
+    print("Optional: DirectGPU block for fancier rendering.")
+    print("The wizard asks which info panel to display (breach status,")
+    print("zones, clock, log, personnel, entities, or state).")
 elseif role == "radmin" then
     print("You need the 'admin' passcode set on the mainframe first.")
 end
