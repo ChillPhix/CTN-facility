@@ -72,6 +72,72 @@ local function showResult(reply, successMsg)
     sleep(1.5)
 end
 
+local function scrollMenu(title, footer, options)
+    local selected, top = 1, 1
+    while true do
+        ui.frame(term.current(), title, footer)
+        local w, h = term.getSize()
+        local listY = 5
+        local rows = h - 8
+        if rows < 3 then rows = 3 end
+
+        top = math.max(1, math.min(top, math.max(1, #options - rows + 1)))
+        selected = math.max(1, math.min(selected, #options))
+        if selected < top then top = selected end
+        if selected >= top + rows then top = selected - rows + 1 end
+
+        term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
+        term.write("UP/DOWN move  ENTER select  Q logout")
+
+        for row = 1, rows do
+            local idx = top + row - 1
+            local opt = options[idx]
+            if not opt then break end
+            local y = listY + row - 1
+            local hotkey = row <= 9 and tostring(row) or nil
+            local prefix = hotkey and ("["..hotkey.."] ") or "    "
+            local text = prefix..opt[1]
+
+            term.setCursorPos(2, y)
+            if idx == selected then
+                term.setBackgroundColor(ui.FG); term.setTextColor(ui.BG)
+            else
+                term.setBackgroundColor(ui.BG); term.setTextColor(ui.FG)
+            end
+            term.write(text:sub(1, w - 3))
+            term.write(string.rep(" ", math.max(0, w - 2 - #text)))
+            term.setBackgroundColor(ui.BG)
+        end
+
+        term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM)
+        local pageEnd = math.min(#options, top + rows - 1)
+        term.write(("Showing "..top.."-"..pageEnd.." of "..#options):sub(1, w - 3))
+
+        local event, key = os.pullEvent("key")
+        if key == keys.up and selected > 1 then
+            selected = selected - 1
+        elseif key == keys.down and selected < #options then
+            selected = selected + 1
+        elseif key == keys.pageUp then
+            selected = math.max(1, selected - rows)
+        elseif key == keys.pageDown then
+            selected = math.min(#options, selected + rows)
+        elseif key == keys.home then
+            selected = 1
+        elseif key == keys["end"] then
+            selected = #options
+        elseif key == keys.enter then
+            return selected
+        elseif key == keys.q then
+            return #options
+        elseif key >= keys.one and key <= keys.nine then
+            local row = key - keys.one + 1
+            local idx = top + row - 1
+            if options[idx] then return idx end
+        end
+    end
+end
+
 local function promptBody(header)
     term.setTextColor(ui.DIM)
     print(header or "Enter text. End with '.' on its own line.")
@@ -498,10 +564,7 @@ local options = {
 }
 
 while true do
-    ui.frame(term.current(), "REMOTE ADMIN ["..session.username.."]", "C.T.N // CLASSIFIED")
-    local labels = {}
-    for i, o in ipairs(options) do labels[i] = o[1] end
-    local choice = ui.menu(nil, labels, 5)
+    local choice = scrollMenu("REMOTE ADMIN ["..session.username.."]", "C.T.N // CLASSIFIED", options)
     if choice and options[choice] then
         local ok, err = pcall(options[choice][2])
         if not ok then
