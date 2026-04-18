@@ -17,7 +17,7 @@ Features
 - Zone + facility-wide lockdowns
 - Alarm/siren nodes with redstone pulse output
 - Player detection via Advanced Peripherals
-- Document archive with clearance-gated folders
+- Hierarchical document archive with clearance-gated folders and records
 - Central mainframe with live status monitor
 - Multiple remote admin terminals (no more single point of admin)
 - Control room with dashboard + breach/lockdown controls
@@ -40,7 +40,7 @@ Roles / terminal types
               for breach, lockdown, panic, security, etc. Optional
               redstone out for in-world lights.
 - detector  : player detector reporting zone occupancy
-- archive   : document archive browser
+- archive   : hierarchical document archive browser
 - action    : facility-wide emergency response terminal. Card-authenticated.
               Clearance determines available actions. Clickable UI.
               Optional panic button via redstone input.
@@ -178,6 +178,24 @@ Defense layers:
 - Personnel can be suspended without revoking cards
 
 
+ARCHIVE SYSTEM
+==============
+The archive is a browsable folder tree rooted at:
+
+    Departments
+
+Admins can create folders and text documents anywhere in the tree from
+the local admin console or any remote admin terminal. Each folder and
+document has a required clearance level. Folder restrictions inherit
+downward: if a user cannot open a parent folder, they cannot open any
+documents or subfolders inside it.
+
+Archive users insert an ID card at an archive terminal. They can see
+folder names in the current folder, including restricted folders, but
+locked folders and documents cannot be opened without the required
+clearance.
+
+
 TROUBLESHOOTING
 ===============
 
@@ -230,7 +248,7 @@ terminals/control.lua   - Control room dashboard
 terminals/chamber.lua   - Containment chamber terminal
 terminals/alarm.lua     - Siren/alarm node
 terminals/detector.lua  - Player detector
-terminals/archive.lua   - Document archive browser
+terminals/archive.lua   - Hierarchical document archive browser
 
 install.lua             - GitHub-based installer
 

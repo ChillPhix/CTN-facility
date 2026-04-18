@@ -186,12 +186,23 @@ function handlers.issue_request(from, payload)
     return {ok=true}
 end
 
--- Document terminal: {diskID, action, docId?}
+-- Document terminal: {diskID, action, folderId?, docId?}
 function handlers.doc_request(from, payload)
     local person = db.lookupDisk(payload.diskID)
     if not person then return {ok=false, reason="bad_disk"} end
 
-    if payload.action == "list" then
+    if payload.action == "browse" then
+        local tree, err = db.listArchiveChildren(payload.folderId or "root", person.clearance)
+        if not tree then
+            db.logFrom("docs", "archive folder denied to "..person.name, from,
+                {actor=person.name, folderId=payload.folderId, reason=err})
+            return {ok=false, reason=err}
+        end
+        tree.path = db.getArchivePath(payload.folderId or "root")
+        db.logFrom("docs", "archive browsed by "..person.name, from,
+            {actor=person.name, clearance=person.clearance, folderId=payload.folderId or "root"})
+        return {ok=true, archive=tree, person={name=person.name, clearance=person.clearance}}
+    elseif payload.action == "list" then
         db.logFrom("docs", "archive browsed by "..person.name, from,
             {actor=person.name, clearance=person.clearance})
         return {ok=true, docs=db.listDocuments(person.clearance),
@@ -688,6 +699,39 @@ adminActions.set_passcode = function(args)
 end
 
 adminActions.add_document = function(args)
+    db.addDocument(args.id, args.title, args.folderId or args.folder, args.minClearance, args.body, args.author)
+    return {ok=true}
+end
+
+adminActions.add_folder = function(args)
+    local id, err = db.addFolder(args.parentId or "root", args.name, args.minClearance, args.author)
+    if not id then return {ok=false, reason=err} end
+    return {ok=true, folderId=id}
+end
+
+adminActions.browse_archive = function(args)
+    local tree, err = db.listArchiveChildren(args.folderId or "root", 0)
+    if not tree then return {ok=false, reason=err} end
+    tree.path = db.getArchivePath(args.folderId or "root")
+    return {ok=true, archive=tree}
+end
+
+adminActions.archive_path = function(args)
+    return {ok=true, path=db.getArchivePath(args.folderId or "root")}
+end
+
+adminActions.list_folders = function()
+    local out = {}
+    for id, f in pairs(db.get().archiveFolders or {}) do
+        out[#out+1] = {
+            id=id, name=f.name, parent=f.parent, minClearance=f.minClearance or 5,
+        }
+    end
+    table.sort(out, function(a,b) return a.id < b.id end)
+    return {ok=true, folders=out}
+end
+
+adminActions.add_document_legacy = function(args)
     db.addDocument(args.id, args.title, args.folder, args.minClearance, args.body, args.author)
     return {ok=true}
 end
@@ -710,7 +754,10 @@ function handlers.admin_command(from, payload)
         return {ok=false, reason="crash"}
     end
 
-    if not payload.action:match("^list_") and payload.action ~= "view_log" then
+    if not payload.action:match("^list_")
+       and payload.action ~= "view_log"
+       and payload.action ~= "browse_archive"
+       and payload.action ~= "archive_path" then
         db.log("admin", "remote: "..payload.action, {by=payload.issuedBy})
     end
     return result

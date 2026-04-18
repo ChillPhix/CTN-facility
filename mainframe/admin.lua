@@ -35,6 +35,52 @@ local function section(title)
     term.setCursorPos(2, 5)
 end
 
+local function archivePathLabel(path)
+    local parts = {}
+    for _, p in ipairs(path or {}) do parts[#parts+1] = p.name end
+    local s = table.concat(parts, " / ")
+    if s == "" then s = "Departments" end
+    return s
+end
+
+local function chooseArchiveFolder(title)
+    local folderId = "root"
+    while true do
+        local archive = db.listArchiveChildren(folderId, 0)
+        archive.path = db.getArchivePath(folderId)
+        ui.frame(term.current(), title or "SELECT ARCHIVE FOLDER", "0 = choose current")
+        term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
+        term.write(archivePathLabel(archive.path):sub(1, select(1, term.getSize()) - 3))
+
+        term.setCursorPos(2, 6); term.setTextColor(ui.ACCENT)
+        term.write("[0] Use this folder")
+        local folders = archive.folders or {}
+        local y = 8
+        for i, f in ipairs(folders) do
+            term.setCursorPos(4, y)
+            term.setTextColor(ui.DIM); write("["..i.."] ")
+            term.setTextColor(ui.FG); write("[L"..(f.minClearance or 5).."] "..f.name)
+            y = y + 1
+            if y > select(2, term.getSize()) - 4 then break end
+        end
+        term.setCursorPos(2, select(2, term.getSize()) - 3); term.setTextColor(ui.DIM)
+        write("B = parent, X = cancel")
+        term.setCursorPos(2, select(2, term.getSize()) - 2); term.setTextColor(ui.FG)
+        write("> "); term.setTextColor(ui.ACCENT)
+        local choice = read()
+        if choice == "0" then
+            return archive.folder.id, archivePathLabel(archive.path)
+        elseif choice:lower() == "x" then
+            return nil
+        elseif choice:lower() == "b" then
+            folderId = archive.folder.parent or "root"
+        else
+            local n = tonumber(choice)
+            if n and folders[n] then folderId = folders[n].id end
+        end
+    end
+end
+
 local menu = {}
 
 menu.addPerson = function()
@@ -182,11 +228,15 @@ menu.setPasscode = function()
 end
 
 menu.addDocument = function()
+    local folderId, folderPath = chooseArchiveFolder("DOCUMENT FOLDER")
+    if not folderId then return end
     section("ADD DOCUMENT")
     local id = ui.prompt("ID (e.g. SCP-173): ")
     term.setCursorPos(2, 6); local title = ui.prompt("Title: ")
-    term.setCursorPos(2, 7); local folder = ui.prompt("Folder: ")
-    term.setCursorPos(2, 8); local mc = tonumber(ui.prompt("Min clearance: "))
+    term.setCursorPos(2, 7); term.setTextColor(ui.DIM)
+    term.write(("Folder: "..folderPath):sub(1, select(1, term.getSize()) - 3))
+    term.setCursorPos(2, 8); term.setTextColor(ui.FG)
+    local mc = tonumber(ui.prompt("Required clearance (0-5): "))
     term.setCursorPos(2, 10); term.setTextColor(ui.DIM)
     print("Enter body. End with a single '.' on its own line.")
     term.setTextColor(ui.FG)
@@ -196,8 +246,27 @@ menu.addDocument = function()
         if line == "." then break end
         body[#body+1] = line
     end
-    db.addDocument(id, title, folder, mc, table.concat(body, "\n"), "admin")
+    db.addDocument(id, title, folderId, mc, table.concat(body, "\n"), "admin")
     ui.bigStatus(term.current(), {"DOCUMENT SAVED", "", id.." - "..title}, "granted")
+    sleep(1.5)
+end
+
+menu.addFolder = function()
+    local parentId, parentPath = chooseArchiveFolder("NEW FOLDER PARENT")
+    if not parentId then return end
+    section("CREATE ARCHIVE FOLDER")
+    term.setCursorPos(2, 5); term.setTextColor(ui.DIM)
+    term.write(parentPath:sub(1, select(1, term.getSize()) - 3))
+    term.setCursorPos(2, 7); term.setTextColor(ui.FG)
+    local name = ui.prompt("Folder name: ")
+    term.setCursorPos(2, 8)
+    local mc = tonumber(ui.prompt("Required clearance (0-5): "))
+    local id, err = db.addFolder(parentId, name, mc, "admin")
+    if id then
+        ui.bigStatus(term.current(), {"FOLDER CREATED", "", name}, "granted")
+    else
+        ui.bigStatus(term.current(), {"FAILED", "", tostring(err)}, "denied")
+    end
     sleep(1.5)
 end
 
@@ -233,6 +302,7 @@ local options = {
     {"List ID cards",       menu.listDisks},
     {"List doors",          menu.listDoors},
     {"Set passcode",        menu.setPasscode},
+    {"Add archive folder",  menu.addFolder},
     {"Add document",        menu.addDocument},
     {"View security log",   menu.viewLog},
     {"Exit",                function() error("exit", 0) end},

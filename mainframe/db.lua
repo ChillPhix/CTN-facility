@@ -54,6 +54,16 @@ local data = {
     passcodes = { issuer = "0000", control = "0000", admin = "0000" },
     facility  = { state = "normal" },
     documents = {},
+    archiveFolders = {
+        root = {
+            id = "root",
+            name = "Departments",
+            parent = nil,
+            minClearance = 5,
+            created = 0,
+            author = "SYSTEM",
+        },
+    },
 
     -- Pending terminals awaiting admin approval.
     -- pending[computerID] = {type="door"|"alarm"|"detector", requested_at, hostname}
@@ -84,6 +94,56 @@ local data = {
 }
 
 -- ============================================================
+-- Schema migration / compatibility
+-- ============================================================
+local function slug(s)
+    s = tostring(s or ""):lower()
+    s = s:gsub("[^%w]+", "_"):gsub("^_+", ""):gsub("_+$", "")
+    if s == "" then s = "item" end
+    return s
+end
+
+local function folderId(parentId, name)
+    return tostring(parentId or "root").."."..slug(name)
+end
+
+local function ensureArchiveSchema()
+    data.archiveFolders = data.archiveFolders or {}
+    data.archiveFolders.root = data.archiveFolders.root or {
+        id = "root",
+        name = "Departments",
+        parent = nil,
+        minClearance = 5,
+        created = 0,
+        author = "SYSTEM",
+    }
+    data.documents = data.documents or {}
+
+    -- Older databases stored documents with a plain string folder name.
+    -- Promote those labels into real archive folders and attach the docs.
+    for id, doc in pairs(data.documents) do
+        if not doc.folderId then
+            local folderName = doc.folder or "General"
+            local fid = folderId("root", folderName)
+            if not data.archiveFolders[fid] then
+                data.archiveFolders[fid] = {
+                    id = fid,
+                    name = folderName,
+                    parent = "root",
+                    minClearance = 5,
+                    created = doc.created or os.epoch("utc"),
+                    author = doc.author or "SYSTEM",
+                }
+            end
+            doc.folderId = fid
+        end
+        doc.id = doc.id or id
+        doc.title = doc.title or id
+        doc.minClearance = doc.minClearance or 5
+    end
+end
+
+-- ============================================================
 -- Persistence
 -- ============================================================
 function M.load()
@@ -96,15 +156,20 @@ function M.load()
         -- merge so new fields in code don't break old saves
         for k, v in pairs(loaded) do data[k] = v end
     end
+    ensureArchiveSchema()
 end
 
 function M.save()
+    ensureArchiveSchema()
     local f = fs.open(M.PATH, "w")
     f.write(textutils.serialize(data))
     f.close()
 end
 
-function M.get() return data end
+function M.get()
+    ensureArchiveSchema()
+    return data
+end
 
 -- ============================================================
 -- Personnel
@@ -287,30 +352,157 @@ function M.setZoneLockdown(zone, value)
 end
 
 -- ============================================================
--- Documents
+-- Archive folders + documents
 -- ============================================================
+function M.getFolder(folderId_)
+    ensureArchiveSchema()
+    return data.archiveFolders[folderId_ or "root"]
+end
+
+function M.canAccessFolder(clearance, folderId_)
+    ensureArchiveSchema()
+    local fid = folderId_ or "root"
+    local seen = {}
+    while fid do
+        if seen[fid] then return false end
+        seen[fid] = true
+        local folder = data.archiveFolders[fid]
+        if not folder then return false end
+        if clearance > (folder.minClearance or 5) then return false end
+        fid = folder.parent
+    end
+    return true
+end
+
+function M.addFolder(parentId, name, minClearance, author)
+    ensureArchiveSchema()
+    parentId = parentId or "root"
+    if not data.archiveFolders[parentId] then return nil, "parent_not_found" end
+    if not name or name == "" then return nil, "missing_name" end
+    local base = folderId(parentId, name)
+    local id = base
+    local n = 2
+    while data.archiveFolders[id] do
+        id = base.."_"..n
+        n = n + 1
+    end
+    data.archiveFolders[id] = {
+        id = id,
+        name = name,
+        parent = parentId,
+        minClearance = minClearance or 5,
+        created = os.epoch("utc"),
+        author = author or "admin",
+    }
+    M.save()
+    return id
+end
+
+function M.listArchiveChildren(folderId_, clearance)
+    ensureArchiveSchema()
+    local fid = folderId_ or "root"
+    local folder = data.archiveFolders[fid]
+    if not folder then return nil, "folder_not_found" end
+    if not M.canAccessFolder(clearance, fid) then return nil, "folder_restricted" end
+
+    local folders, docs = {}, {}
+    for id, f in pairs(data.archiveFolders) do
+        if f.parent == fid then
+            folders[#folders+1] = {
+                id = id,
+                name = f.name,
+                minClearance = f.minClearance or 5,
+                locked = clearance > (f.minClearance or 5),
+            }
+        end
+    end
+    table.sort(folders, function(a, b) return a.name:lower() < b.name:lower() end)
+
+    for id, doc in pairs(data.documents) do
+        if doc.folderId == fid then
+            docs[#docs+1] = {
+                id = id,
+                title = doc.title,
+                folderId = doc.folderId,
+                minClearance = doc.minClearance or 5,
+                author = doc.author,
+                created = doc.created,
+                locked = clearance > (doc.minClearance or 5),
+            }
+        end
+    end
+    table.sort(docs, function(a, b) return a.title:lower() < b.title:lower() end)
+
+    return {
+        folder = {
+            id = folder.id,
+            name = folder.name,
+            parent = folder.parent,
+            minClearance = folder.minClearance or 5,
+        },
+        folders = folders,
+        documents = docs,
+    }
+end
+
+function M.getArchivePath(folderId_)
+    ensureArchiveSchema()
+    local path = {}
+    local fid = folderId_ or "root"
+    local seen = {}
+    while fid do
+        if seen[fid] then break end
+        seen[fid] = true
+        local f = data.archiveFolders[fid]
+        if not f then break end
+        table.insert(path, 1, {id=f.id, name=f.name, minClearance=f.minClearance or 5})
+        fid = f.parent
+    end
+    return path
+end
+
 function M.addDocument(id, title, folder, minClearance, body, author)
+    ensureArchiveSchema()
+    local folderId_ = folder or "root"
+    if not data.archiveFolders[folderId_] then
+        folderId_ = folderId("root", folder)
+        if not data.archiveFolders[folderId_] then
+            data.archiveFolders[folderId_] = {
+                id = folderId_,
+                name = folder or "General",
+                parent = "root",
+                minClearance = 5,
+                created = os.epoch("utc"),
+                author = author or "admin",
+            }
+        end
+    end
     data.documents[id] = {
-        id = id, title = title, folder = folder or "General",
-        minClearance = minClearance, body = body, author = author,
+        id = id, title = title, folderId = folderId_, folder = folderId_,
+        minClearance = minClearance or 5, body = body, author = author,
         created = os.epoch("utc"),
     }
     M.save()
 end
 
 function M.listDocuments(clearance)
+    ensureArchiveSchema()
     local out = {}
     for id, doc in pairs(data.documents) do
-        if clearance <= doc.minClearance then
-            out[#out+1] = {id=id, title=doc.title, folder=doc.folder, minClearance=doc.minClearance}
-        end
+        local folderOk = M.canAccessFolder(clearance, doc.folderId or "root")
+        out[#out+1] = {
+            id=id, title=doc.title, folder=doc.folder, folderId=doc.folderId,
+            minClearance=doc.minClearance, locked = not folderOk or clearance > doc.minClearance,
+        }
     end
     return out
 end
 
 function M.getDocument(id, clearance)
+    ensureArchiveSchema()
     local d = data.documents[id]
     if not d then return nil, "not_found" end
+    if not M.canAccessFolder(clearance, d.folderId or "root") then return nil, "folder_restricted" end
     if clearance > d.minClearance then return nil, "insufficient_clearance" end
     return d
 end

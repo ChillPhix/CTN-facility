@@ -85,6 +85,53 @@ local function promptBody(header)
     return table.concat(lines, "\n")
 end
 
+local function archivePathLabel(path)
+    local parts = {}
+    for _, p in ipairs(path or {}) do parts[#parts+1] = p.name end
+    local s = table.concat(parts, " / ")
+    if s == "" then s = "Departments" end
+    return s
+end
+
+local function chooseArchiveFolder(title)
+    local folderId = "root"
+    while true do
+        local r = sendAdmin("browse_archive", {folderId=folderId})
+        if not r or not r.ok then showResult(r); return nil end
+        local archive = r.archive
+        ui.frame(term.current(), title or "SELECT ARCHIVE FOLDER", "0 = choose current")
+        term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
+        term.write(archivePathLabel(archive.path):sub(1, select(1, term.getSize()) - 3))
+
+        term.setCursorPos(2, 6); term.setTextColor(ui.ACCENT)
+        term.write("[0] Use this folder")
+        local y = 8
+        local folders = archive.folders or {}
+        for i, f in ipairs(folders) do
+            term.setCursorPos(4, y)
+            term.setTextColor(ui.DIM); write("["..i.."] ")
+            term.setTextColor(ui.FG); write("[L"..(f.minClearance or 5).."] "..f.name)
+            y = y + 1
+            if y > select(2, term.getSize()) - 4 then break end
+        end
+        term.setCursorPos(2, select(2, term.getSize()) - 3); term.setTextColor(ui.DIM)
+        write("B = parent, X = cancel")
+        term.setCursorPos(2, select(2, term.getSize()) - 2); term.setTextColor(ui.FG)
+        write("> "); term.setTextColor(ui.ACCENT)
+        local choice = read()
+        if choice == "0" then
+            return archive.folder.id, archivePathLabel(archive.path)
+        elseif choice:lower() == "x" then
+            return nil
+        elseif choice:lower() == "b" then
+            folderId = archive.folder.parent or "root"
+        else
+            local n = tonumber(choice)
+            if n and folders[n] then folderId = folders[n].id end
+        end
+    end
+end
+
 -- ============================================================
 -- Login
 -- ============================================================
@@ -359,18 +406,37 @@ end
 -- ============================================================
 -- Docs, passcodes, log
 -- ============================================================
+menu.addFolder = function()
+    local parentId, parentPath = chooseArchiveFolder("NEW FOLDER PARENT")
+    if not parentId then return end
+    section("CREATE ARCHIVE FOLDER")
+    term.setCursorPos(2, 5); term.setTextColor(ui.DIM)
+    term.write(parentPath:sub(1, select(1, term.getSize()) - 3))
+    term.setCursorPos(2, 7); term.setTextColor(ui.FG)
+    local name = ui.prompt("Folder name: ")
+    term.setCursorPos(2, 8)
+    local mc = tonumber(ui.prompt("Required clearance (0-5): "))
+    showResult(sendAdmin("add_folder", {
+        parentId=parentId, name=name, minClearance=mc, author=session.username,
+    }), "FOLDER CREATED")
+end
+
 menu.addDocument = function()
+    local folderId, folderPath = chooseArchiveFolder("DOCUMENT FOLDER")
+    if not folderId then return end
     section("ADD DOCUMENT")
     local id = ui.prompt("ID: ")
     term.setCursorPos(2, 6); local title = ui.prompt("Title: ")
-    term.setCursorPos(2, 7); local folder = ui.prompt("Folder: ")
-    term.setCursorPos(2, 8); local mc = tonumber(ui.prompt("Min clearance: "))
+    term.setCursorPos(2, 7); term.setTextColor(ui.DIM)
+    term.write(("Folder: "..folderPath):sub(1, select(1, term.getSize()) - 3))
+    term.setCursorPos(2, 8); term.setTextColor(ui.FG)
+    local mc = tonumber(ui.prompt("Required clearance (0-5): "))
     term.setCursorPos(2, 10); term.setTextColor(ui.DIM)
     print("Body (end with '.' alone):")
     term.setTextColor(ui.FG)
     local body = promptBody()
     showResult(sendAdmin("add_document", {
-        id=id, title=title, folder=folder, minClearance=mc,
+        id=id, title=title, folderId=folderId, minClearance=mc,
         body=body, author=session.username,
     }), "DOCUMENT SAVED")
 end
@@ -424,6 +490,7 @@ local options = {
     {"List entities",       menu.listEntities},
     {"Edit entity",         menu.editEntity},
     {"Delete entity",       menu.deleteEntity},
+    {"Add archive folder",  menu.addFolder},
     {"Add document",        menu.addDocument},
     {"Set passcode",        menu.setPasscode},
     {"View security log",   menu.viewLog},
