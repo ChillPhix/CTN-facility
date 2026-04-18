@@ -194,9 +194,18 @@ downward: if a user cannot open a parent folder, they cannot open any
 documents or subfolders inside it.
 
 Archive users insert an ID card at an archive terminal. They can use
-arrow keys, mouse clicks, and mouse wheel scrolling. They can see folder
-names in the current folder, including restricted folders, but locked
-folders and documents cannot be opened without the required clearance.
+arrow keys, mouse clicks, monitor touch, and mouse wheel scrolling. They
+can see folder names in the current folder, including restricted folders,
+but locked folders and documents cannot be opened without the required
+clearance. L0-L3 cards can create folders/documents in folders they can
+open. L0-L2 cards can delete documents and empty folders.
+
+Archive terminals can import text from files on the inserted ID floppy:
+place a .txt, .md, or .log file on the card, navigate to the destination
+folder, then choose IMPORT. ComputerCraft printers can print but cannot
+scan physical paper back into text; use disk import or paste/type the
+body when creating a document.
+
 If a printer is attached, an open document can be printed with P or the
 PRINT button.
 

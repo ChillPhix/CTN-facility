@@ -191,6 +191,21 @@ function handlers.doc_request(from, payload)
     local person = db.lookupDisk(payload.diskID)
     if not person then return {ok=false, reason="bad_disk"} end
 
+    local function canCreate(minClearance)
+        -- L0-L3 may author archive records. They cannot create records
+        -- more restricted than their own clearance.
+        minClearance = minClearance or 5
+        if person.clearance > 3 then return false, "insufficient_clearance" end
+        if minClearance < person.clearance then return false, "cannot_set_higher_restriction" end
+        return true
+    end
+
+    local function canDelete()
+        -- Deletion is more sensitive: L0-L2 only.
+        if person.clearance > 2 then return false, "insufficient_clearance" end
+        return true
+    end
+
     if payload.action == "browse" then
         local tree, err = db.listArchiveChildren(payload.folderId or "root", person.clearance)
         if not tree then
@@ -217,6 +232,46 @@ function handlers.doc_request(from, payload)
         db.logFrom("docs", "read: "..payload.docId.." by "..person.name, from,
             {actor=person.name, docId=payload.docId})
         return {ok=true, doc=doc}
+    elseif payload.action == "create_folder" then
+        local okAuth, reason = canCreate(payload.minClearance)
+        if not okAuth then return {ok=false, reason=reason} end
+        if not db.canAccessFolder(person.clearance, payload.parentId or "root") then
+            return {ok=false, reason="folder_restricted"}
+        end
+        local id, err = db.addFolder(payload.parentId or "root", payload.name, payload.minClearance, person.name)
+        if not id then return {ok=false, reason=err} end
+        db.logFrom("docs", "folder created: "..payload.name.." by "..person.name, from,
+            {actor=person.name, folderId=id, parentId=payload.parentId})
+        return {ok=true, folderId=id}
+    elseif payload.action == "create_document" then
+        local okAuth, reason = canCreate(payload.minClearance)
+        if not okAuth then return {ok=false, reason=reason} end
+        if not db.canAccessFolder(person.clearance, payload.folderId or "root") then
+            return {ok=false, reason="folder_restricted"}
+        end
+        if not payload.id or payload.id == "" then return {ok=false, reason="missing_id"} end
+        if db.get().documents[payload.id] then return {ok=false, reason="document_exists"} end
+        db.addDocument(payload.id, payload.title or payload.id, payload.folderId or "root",
+            payload.minClearance, payload.body or "", person.name)
+        db.logFrom("docs", "document created: "..payload.id.." by "..person.name, from,
+            {actor=person.name, docId=payload.id, folderId=payload.folderId})
+        return {ok=true}
+    elseif payload.action == "delete_document" then
+        local okAuth, reason = canDelete()
+        if not okAuth then return {ok=false, reason=reason} end
+        local ok, err = db.deleteDocument(payload.docId)
+        if not ok then return {ok=false, reason=err} end
+        db.logFrom("docs", "document deleted: "..payload.docId.." by "..person.name, from,
+            {actor=person.name, docId=payload.docId})
+        return {ok=true}
+    elseif payload.action == "delete_folder" then
+        local okAuth, reason = canDelete()
+        if not okAuth then return {ok=false, reason=reason} end
+        local ok, err = db.deleteFolder(payload.folderId)
+        if not ok then return {ok=false, reason=err} end
+        db.logFrom("docs", "folder deleted by "..person.name, from,
+            {actor=person.name, folderId=payload.folderId})
+        return {ok=true}
     end
     return {ok=false, reason="unknown_action"}
 end

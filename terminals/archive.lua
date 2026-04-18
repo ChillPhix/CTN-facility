@@ -30,6 +30,8 @@ local display = gpu.openBackend({preferGpu=true})
 if display and display.mode == "term" then display = false end
 local lastButtons = {}
 local lastDocButtons = {}
+local lastActionButtons = {}
+local lastDisplayButtons = {}
 
 local function waitForDisk()
     ui.frame(term.current(), "DOCUMENT ARCHIVE", "INSERT ID CARD")
@@ -57,6 +59,13 @@ local function readRequest(diskID, docId)
         action = "read",
         docId = docId,
     }, 3)
+end
+
+local function mutateRequest(diskID, action, payload)
+    payload = payload or {}
+    payload.diskID = diskID
+    payload.action = action
+    return proto.request(MAINFRAME, "doc_request", payload, 4)
 end
 
 local function pathText(path)
@@ -98,6 +107,8 @@ local function drawBrowser(reply, selected, top)
 
     ui.frame(term.current(), "ARCHIVE", person.name.."  //  L"..person.clearance)
     lastButtons = {}
+    lastActionButtons = {}
+    lastDisplayButtons = {}
     term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
     term.write(pathText(archive.path):sub(1, w - 3))
 
@@ -143,8 +154,20 @@ local function drawBrowser(reply, selected, top)
         end
     end
 
+    local bw = math.max(7, math.floor((w - 6) / 4))
+    local ay = h - 3
+    lastActionButtons = {
+        {key="c", label="FOLDER", x=2, y=ay, w=bw, h=1},
+        {key="n", label="NEW DOC", x=3+bw, y=ay, w=bw, h=1},
+        {key="i", label="IMPORT", x=4+bw*2, y=ay, w=bw, h=1},
+        {key="d", label="DELETE", x=5+bw*3, y=ay, w=w-(5+bw*3), h=1},
+    }
+    for _, b in ipairs(lastActionButtons) do
+        ui.drawButton(term.current(), b.x, b.y, b.w, b.h, b.label, {hotkey=b.key})
+    end
+
     term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM)
-    term.write("arrows=move  ENTER=open  BACKSPACE=up  Q=eject")
+    term.write("ENTER=open  C/N/I=create/import  D=delete  Q=eject")
     ui.footer(term.current(), "C.T.N ARCHIVE // "..#(archive.folders or {}).." folders // "..#(archive.documents or {}).." docs")
 
     if display then
@@ -170,20 +193,34 @@ local function drawBrowser(reply, selected, top)
                     display:text(p.x + 100, y, trimLine(item.label, math.floor((p.w - 120) / 6)), col, 10, "plain")
                     y = y + rowH
                 end
-                display:text(12, dh - 14, "Mouse/touch on computer screen. P prints open records.", gpu.COLORS.dim, 10, "plain")
+                display:text(12, dh - 14, "C folder  N document  I import disk text  D delete  P print records", gpu.COLORS.dim, 10, "plain")
             else
                 local p = gpu.panel(display, 1, 3, dw, dh - 3, "FILES", "normal")
                 local y = p.contentY
-                local visible = p.h - 3
+                local visible = p.h - 5
                 for row = 1, visible do
                     local idx = top + row - 1
                     local item = items[idx]
                     if not item then break end
+                    lastDisplayButtons[#lastDisplayButtons+1] = {kind="item", x=1, y=y, w=dw, h=1, index=idx}
                     local col = item.locked and gpu.COLORS.err or gpu.COLORS.fg
                     local marker = idx == selected and ">" or " "
                     local kind = item.kind == "folder" and "[D]" or item.kind == "doc" and "[F]" or "[^]"
                     display:text(p.x + 1, y, trimLine(marker.." "..kind.." "..item.label, p.w - 2), col)
                     y = y + 1
+                end
+                local by = dh - 1
+                local bw = math.max(6, math.floor(dw / 4))
+                local labels = {
+                    {key="c", label="FOLDER", x=1, y=by, w=bw, h=1},
+                    {key="n", label="NEW DOC", x=1+bw, y=by, w=bw, h=1},
+                    {key="i", label="IMPORT", x=1+bw*2, y=by, w=bw, h=1},
+                    {key="d", label="DELETE", x=1+bw*3, y=by, w=dw-bw*3, h=1},
+                }
+                for _, b in ipairs(labels) do
+                    display:fillRect(b.x, b.y, b.w, b.h, gpu.COLORS.fg)
+                    display:textBg(b.x + 1, b.y, trimLine(b.label, b.w - 2), gpu.COLORS.bg, gpu.COLORS.fg)
+                    lastDisplayButtons[#lastDisplayButtons+1] = {kind="action", x=b.x, y=b.y, w=b.w, h=b.h, key=b.key}
                 end
             end
             display:update()
@@ -268,6 +305,178 @@ local function printDoc(doc)
     end
     sleep(1.5)
     return ok
+end
+
+local function showMutationResult(reply, success)
+    if not reply then
+        ui.bigStatus(term.current(), {"MAINFRAME", "UNREACHABLE"}, "error")
+    elseif reply.ok then
+        ui.bigStatus(term.current(), {success or "DONE"}, "granted")
+    else
+        ui.bigStatus(term.current(), {"FAILED", "", tostring(reply.reason or "?"):upper()}, "denied")
+    end
+    sleep(1.5)
+end
+
+local function promptClearance(default)
+    term.setTextColor(ui.FG)
+    write("Required clearance (0-5)")
+    if default ~= nil then write(" ["..default.."]") end
+    write(": ")
+    term.setTextColor(ui.ACCENT)
+    local s = read()
+    term.setTextColor(ui.FG)
+    if s == "" and default ~= nil then return default end
+    local n = tonumber(s)
+    if not n then return default or 5 end
+    return math.max(0, math.min(5, n))
+end
+
+local function promptBody()
+    term.setTextColor(ui.DIM)
+    print("Body text. End with a single '.' on its own line.")
+    term.setTextColor(ui.FG)
+    local lines = {}
+    while true do
+        local line = read()
+        if line == "." then break end
+        lines[#lines+1] = line
+    end
+    return table.concat(lines, "\n")
+end
+
+local function createFolder(diskID, parentId, person)
+    ui.frame(term.current(), "CREATE FOLDER", "Current folder")
+    term.setCursorPos(2, 5); term.setTextColor(ui.FG)
+    write("Folder name: "); term.setTextColor(ui.ACCENT)
+    local name = read()
+    term.setCursorPos(2, 7)
+    local minClearance = promptClearance(person and person.clearance or 5)
+    showMutationResult(mutateRequest(diskID, "create_folder", {
+        parentId=parentId, name=name, minClearance=minClearance,
+    }), "FOLDER CREATED")
+end
+
+local function createDocument(diskID, folderId, person, importedBody, importedTitle)
+    ui.frame(term.current(), importedBody and "IMPORT DOCUMENT" or "CREATE DOCUMENT", "Current folder")
+    term.setCursorPos(2, 5); term.setTextColor(ui.FG)
+    write("Document ID: "); term.setTextColor(ui.ACCENT)
+    local id = read()
+    term.setCursorPos(2, 6); term.setTextColor(ui.FG)
+    write("Title")
+    if importedTitle then write(" ["..importedTitle.."]") end
+    write(": "); term.setTextColor(ui.ACCENT)
+    local title = read()
+    if title == "" then title = importedTitle or id end
+    term.setCursorPos(2, 8)
+    local minClearance = promptClearance(person and person.clearance or 5)
+    local body
+    if importedBody then
+        body = importedBody
+    else
+        term.setCursorPos(2, 10)
+        body = promptBody()
+    end
+    showMutationResult(mutateRequest(diskID, "create_document", {
+        folderId=folderId, id=id, title=title, minClearance=minClearance, body=body,
+    }), "DOCUMENT SAVED")
+end
+
+local function listImportFiles(base)
+    local out = {}
+    local function walk(path)
+        for _, name in ipairs(fs.list(path)) do
+            local p = path == "" and name or (path.."/"..name)
+            if fs.isDir(p) then
+                walk(p)
+            else
+                local lower = name:lower()
+                if lower:match("%.txt$") or lower:match("%.md$") or lower:match("%.log$") then
+                    out[#out+1] = p
+                end
+            end
+        end
+    end
+    walk(base)
+    table.sort(out)
+    return out
+end
+
+local function importDocument(diskID, folderId, person)
+    local mount = drive.getMountPath()
+    if not mount then
+        ui.bigStatus(term.current(), {"NO DISK FILES", "", "Card mount unavailable."}, "denied")
+        sleep(1.5)
+        return
+    end
+    local files = listImportFiles(mount)
+    if #files == 0 then
+        ui.bigStatus(term.current(), {"NO TEXT FILES", "", "Put .txt/.md/.log on the card."}, "denied")
+        sleep(2)
+        return
+    end
+
+    local selected, top = 1, 1
+    while true do
+        ui.frame(term.current(), "IMPORT FROM DISK", "Text files on inserted card")
+        local w, h = term.getSize()
+        local rows = h - 8
+        for row = 1, rows do
+            local idx = top + row - 1
+            local file = files[idx]
+            if not file then break end
+            term.setCursorPos(2, 4 + row)
+            if idx == selected then
+                term.setBackgroundColor(ui.FG); term.setTextColor(ui.BG)
+            else
+                term.setBackgroundColor(ui.BG); term.setTextColor(ui.FG)
+            end
+            local shown = file:gsub("^"..mount.."/?", "")
+            term.write(trimLine(shown, w - 3))
+            term.write(string.rep(" ", math.max(0, w - 2 - #shown)))
+            term.setBackgroundColor(ui.BG)
+        end
+        term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM)
+        term.write("ENTER=import  BACKSPACE=cancel")
+        local _, key = os.pullEvent("key")
+        if key == keys.up and selected > 1 then
+            selected = selected - 1
+            if selected < top then top = selected end
+        elseif key == keys.down and selected < #files then
+            selected = selected + 1
+            if selected >= top + rows then top = top + 1 end
+        elseif key == keys.enter then
+            local f = fs.open(files[selected], "r")
+            local body = f.readAll()
+            f.close()
+            local title = fs.getName(files[selected]):gsub("%.%w+$", "")
+            createDocument(diskID, folderId, person, body, title)
+            return
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+local function deleteSelected(diskID, item)
+    if not item or item.kind == "back" then return end
+    ui.clear(term.current())
+    ui.header(term.current(), "CONFIRM DELETE")
+    term.setCursorPos(2, 5); term.setTextColor(ui.ERR)
+    term.write("Delete "..item.kind..": "..item.label)
+    term.setCursorPos(2, 7); term.setTextColor(ui.FG)
+    term.write("Type DELETE to confirm: "); term.setTextColor(ui.ACCENT)
+    if read() ~= "DELETE" then return end
+    local action = item.kind == "folder" and "delete_folder" or "delete_document"
+    local payload = item.kind == "folder" and {folderId=item.id} or {docId=item.id}
+    showMutationResult(mutateRequest(diskID, action, payload), "DELETED")
+end
+
+local function runBrowserAction(actionKey, diskID, folderId, person, selectedItem)
+    if actionKey == "c" then createFolder(diskID, folderId, person)
+    elseif actionKey == "n" then createDocument(diskID, folderId, person)
+    elseif actionKey == "i" then importDocument(diskID, folderId, person)
+    elseif actionKey == "d" then deleteSelected(diskID, selectedItem) end
 end
 
 local function viewDoc(diskID, docId)
@@ -407,6 +616,18 @@ local function archiveSession(diskID)
                         if selected >= top + rows then top = top + 1 end
                     elseif key == keys.enter and items[selected] then
                         if openItem(items[selected]) then break end
+                    elseif key == keys.c then
+                        runBrowserAction("c", diskID, reply.archive.folder.id, reply.person, items[selected])
+                        break
+                    elseif key == keys.n then
+                        runBrowserAction("n", diskID, reply.archive.folder.id, reply.person, items[selected])
+                        break
+                    elseif key == keys.i then
+                        runBrowserAction("i", diskID, reply.archive.folder.id, reply.person, items[selected])
+                        break
+                    elseif key == keys.d then
+                        runBrowserAction("d", diskID, reply.archive.folder.id, reply.person, items[selected])
+                        break
                     elseif key == keys.backspace then
                         local parent = reply.archive and reply.archive.folder and reply.archive.folder.parent
                         if parent then
@@ -419,6 +640,15 @@ local function archiveSession(diskID)
                     end
                 elseif evt[1] == "mouse_click" then
                     local x, y = evt[3], evt[4]
+                    local handledAction = false
+                    for _, b in ipairs(lastActionButtons) do
+                        if ui.hit(b, x, y) then
+                            handledAction = true
+                            runBrowserAction(b.key, diskID, reply.archive.folder.id, reply.person, items[selected])
+                            break
+                        end
+                    end
+                    if handledAction then break end
                     for _, btn in ipairs(lastButtons) do
                         if ui.hit(btn, x, y) then
                             selected = btn.index
@@ -433,6 +663,24 @@ local function archiveSession(diskID)
                     local rows = select(2, term.getSize()) - 10
                     top = math.max(1, math.min(math.max(1, #items - rows + 1), top + dir))
                     selected = math.max(top, math.min(selected, top + rows - 1))
+                elseif evt[1] == "monitor_touch" then
+                    local x, y = evt[3], evt[4]
+                    local refreshNeeded = false
+                    for _, btn in ipairs(lastDisplayButtons) do
+                        if x >= btn.x and x < btn.x + btn.w and y >= btn.y and y < btn.y + btn.h then
+                            if btn.kind == "item" then
+                                selected = btn.index
+                                if openItem(items[selected]) then break end
+                            elseif btn.kind == "action" then
+                                runBrowserAction(btn.key, diskID, reply.archive.folder.id, reply.person, items[selected])
+                                refreshNeeded = true
+                                break
+                            end
+                        end
+                    end
+                    if refreshNeeded or folderId ~= (reply.archive.folder and reply.archive.folder.id) then
+                        break
+                    end
                 end
             end
         end
