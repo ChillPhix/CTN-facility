@@ -564,4 +564,71 @@ function M.listChambers()
     return out
 end
 
+-- ============================================================
+-- Action terminals (scattered throughout facility)
+-- actions[computerId] = {zone, label}
+-- ============================================================
+data.actions = data.actions or {}
+
+function M.addActionTerminal(computerId, zone, label)
+    data.actions[computerId] = {zone=zone, label=label or ("action-"..computerId)}
+    M.save()
+end
+
+function M.getActionTerminal(computerId)
+    return data.actions[computerId]
+end
+
+function M.listActionTerminals()
+    local out = {}
+    for cid, a in pairs(data.actions) do
+        out[#out+1] = {computerId=cid, zone=a.zone, label=a.label}
+    end
+    return out
+end
+
+-- ============================================================
+-- describeTerminal: look up what a computer ID represents.
+-- Used to enrich log entries with human-readable context.
+-- Returns {type="door"|"chamber"|..., name=..., zone=...} or nil.
+-- ============================================================
+function M.describeTerminal(computerId)
+    for name, d in pairs(data.doors) do
+        if d.terminalId == computerId then
+            return {type="door", name=name, zone=d.zone}
+        end
+    end
+    if data.chambers[computerId] then
+        local c = data.chambers[computerId]
+        return {type="chamber", name=c.entityId or "unassigned", zone=c.zone}
+    end
+    if data.alarms[computerId] then
+        return {type="alarm", name="alarm-"..computerId, zone=data.alarms[computerId].zone}
+    end
+    if data.detectors[computerId] then
+        return {type="detector", name="detector-"..computerId, zone=data.detectors[computerId].zone}
+    end
+    if data.actions[computerId] then
+        local a = data.actions[computerId]
+        return {type="action", name=a.label, zone=a.zone}
+    end
+    return nil
+end
+
+--- Log with automatic terminal enrichment. If fromComputerId is given,
+--- annotates the meta with terminal details looked up from the registry.
+function M.logFrom(category, message, fromComputerId, extra)
+    local meta = extra or {}
+    meta.from = fromComputerId
+    if fromComputerId then
+        local info = M.describeTerminal(fromComputerId)
+        if info then
+            meta.terminal_type = info.type
+            meta.terminal_name = info.name
+            meta.zone = info.zone
+        end
+    end
+    M.log(category, message, meta)
+end
+
 return M

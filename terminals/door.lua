@@ -50,67 +50,110 @@ local function setDoor(open)
     redstone.setOutput(myCfg.rs_side or "back", open)
 end
 
-local function idle()
-    drawState("idle", {
-        myCfg.door_label or "SECTOR ACCESS",
-        "",
-        ">>  INSERT ID CARD  <<",
-        "",
-        "Authorised personnel only.",
-    })
-end
+-- Lockdown-aware state
+local facilityState = "normal"
+local zoneLock = false
+local myZone = nil   -- not known until mainframe tells us via alert; until then, show generic
 
-setDoor(false)
-idle()
+local function drawIdle()
+    local bannerState = nil
+    if facilityState == "lockdown" or facilityState == "breach" then
+        bannerState = facilityState
+    elseif zoneLock then
+        bannerState = "lockdown"
+    end
 
-local function mainLoop()
-    while true do
-        os.pullEvent("disk")
-        local diskID = drive.getDiskID()
-        if not diskID then
-            drawState("denied", {"INVALID MEDIA","","Not a valid ID card."})
-            sleep(1.5); idle()
-        else
-            drawState("working", {"VERIFYING...","","Contacting mainframe"})
-            local reply = proto.request(MAINFRAME, "auth_request", {diskID=diskID}, 3)
-            if not reply then
-                drawState("error", {"MAINFRAME","UNREACHABLE"})
-            elseif reply.granted then
-                drawState("granted", {
-                    "ACCESS GRANTED", "",
-                    reply.person.name,
-                    "Clearance L"..reply.person.clearance,
-                    reply.person.department,
-                })
-                setDoor(true)
-                sleep(myCfg.open_duration or 3)
-                setDoor(false)
-            else
-                local pretty = ({
-                    insufficient_clearance = "INSUFFICIENT CLEARANCE",
-                    wrong_department       = "DEPARTMENT NOT AUTHORISED",
-                    facility_lockdown      = "FACILITY LOCKDOWN",
-                    zone_lockdown          = "ZONE LOCKDOWN",
-                    bad_disk               = "INVALID CARD",
-                    revoked                = "CARD REVOKED",
-                    lost                   = "CARD FLAGGED LOST",
-                    unregistered_terminal  = "TERMINAL NOT AUTHORISED",
-                })[reply.reason] or string.upper(tostring(reply.reason or "UNKNOWN"))
-                drawState("denied", {"ACCESS DENIED","",pretty})
+    if bannerState then
+        -- Custom banner display on terminal + monitor
+        for _, t in ipairs({term.current(), monitor}) do
+            if t then
+                ui.clear(t)
+                ui.alertBanner(t, bannerState,
+                    bannerState == "breach" and "CONTAINMENT BREACH" or "LOCKDOWN IN EFFECT")
+                local w, h = t.getSize()
+                ui.box(t, 2, 5, w - 2, h - 8, ui.ERR)
+                t.setBackgroundColor(ui.BG); t.setTextColor(ui.ACCENT)
+                local l = myCfg.door_label or "SECTOR ACCESS"
+                t.setCursorPos(math.max(1, math.floor((w - #l)/2)+1), 7); t.write(l)
+                local l2 = ">> INSERT ID CARD <<"
+                t.setCursorPos(math.max(1, math.floor((w - #l2)/2)+1), 9); t.write(l2)
+                t.setTextColor(ui.DIM)
+                local l3 = "L<=2 personnel only during lockdown"
+                t.setCursorPos(math.max(1, math.floor((w - #l3)/2)+1), 11); t.write(l3)
+                ui.footer(t, "C.T.N  //  LOCKDOWN")
             end
-            sleep(2)
-            while drive.getDiskID() do sleep(0.3) end
-            idle()
         end
+    else
+        drawState("idle", {
+            myCfg.door_label or "SECTOR ACCESS",
+            "",
+            ">>  INSERT ID CARD  <<",
+            "",
+            "Authorised personnel only.",
+        })
     end
 end
 
-local function alertLoop()
-    -- Intentionally empty: running proto.receive here would race with
-    -- the main loop's proto.request calls. If you want the door to
-    -- react to lockdown broadcasts in real time, fold that into
-    -- mainLoop using os.pullEvent.
-    while true do sleep(60) end
+setDoor(false)
+drawIdle()
+
+local function processCard(diskID)
+    drawState("working", {"VERIFYING...","","Contacting mainframe"})
+    local reply = proto.request(MAINFRAME, "auth_request", {diskID=diskID}, 3)
+    if not reply then
+        drawState("error", {"MAINFRAME","UNREACHABLE"})
+    elseif reply.granted then
+        drawState("granted", {
+            "ACCESS GRANTED", "",
+            reply.person.name,
+            "Clearance L"..reply.person.clearance,
+            reply.person.department,
+        })
+        -- learn our zone from the reply so future alerts update correctly
+        if reply.door and reply.door.zone then myZone = reply.door.zone end
+        setDoor(true)
+        sleep(myCfg.open_duration or 3)
+        setDoor(false)
+    else
+        local pretty = ({
+            insufficient_clearance = "INSUFFICIENT CLEARANCE",
+            wrong_department       = "DEPARTMENT NOT AUTHORISED",
+            facility_lockdown      = "FACILITY LOCKDOWN",
+            zone_lockdown          = "ZONE LOCKDOWN",
+            bad_disk               = "INVALID CARD",
+            revoked                = "CARD REVOKED",
+            lost                   = "CARD FLAGGED LOST",
+            unregistered_terminal  = "TERMINAL NOT AUTHORISED",
+        })[reply.reason] or string.upper(tostring(reply.reason or "UNKNOWN"))
+        drawState("denied", {"ACCESS DENIED","",pretty})
+    end
+    sleep(2)
+    while drive.getDiskID() do sleep(0.3) end
+    drawIdle()
 end
 
-parallel.waitForAny(mainLoop, alertLoop)
+-- Single event loop: handles disk events, rednet alerts, and redraws.
+while true do
+    local evt = {os.pullEvent()}
+    local etype = evt[1]
+    if etype == "disk" then
+        local diskID = drive.getDiskID()
+        if not diskID then
+            drawState("denied", {"INVALID MEDIA","","Not a valid ID card."})
+            sleep(1.5); drawIdle()
+        else
+            processCard(diskID)
+        end
+    elseif etype == "rednet_message" then
+        local message, proto_name = evt[3], evt[4]
+        if proto_name == proto.PROTOCOL and type(message) == "table"
+           and message.from == MAINFRAME and message.type == "facility_alert" then
+            local payload = message.payload or {}
+            facilityState = payload.state or facilityState
+            if myZone and payload.zones and payload.zones[myZone] then
+                zoneLock = payload.zones[myZone].lockdown or false
+            end
+            drawIdle()
+        end
+    end
+end

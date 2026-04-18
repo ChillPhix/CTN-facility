@@ -259,6 +259,13 @@ menu.approvePending = function()
         showResult(sendAdmin("add_chamber", {
             terminalId=p.id, entityId = entityId ~= "" and entityId or nil, zone=zone,
         }), "CHAMBER APPROVED")
+    elseif p.type == "action" then
+        section("APPROVE ACTION TERMINAL #"..p.id)
+        local label = ui.prompt("Label (e.g. 'HCZ Guard Post'): ")
+        local zone = pickFromList("ACTION TERMINAL ZONE", ZONES)
+        showResult(sendAdmin("add_action", {
+            terminalId=p.id, label=label, zone=zone,
+        }), "ACTION TERMINAL APPROVED")
     else
         showResult(sendAdmin("reject_pending", {terminalId=p.id}), "REJECTED (unknown type)")
     end

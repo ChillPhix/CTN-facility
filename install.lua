@@ -20,7 +20,7 @@
 -- EDIT THESE
 -- ============================================================
 local GITHUB = {
-    user   = "Chillphix",
+    user   = "YOUR_USERNAME_HERE",
     repo   = "ctn-facility",
     branch = "main",
 }
@@ -60,6 +60,7 @@ local ROLES = {
     alarm     = role({{src="terminals/alarm.lua",    dest="/startup.lua"}}),
     detector  = role({{src="terminals/detector.lua", dest="/startup.lua"}}),
     archive   = role({{src="terminals/archive.lua",  dest="/startup.lua"}}),
+    action    = role({{src="terminals/action.lua",   dest="/startup.lua"}}),
 }
 
 -- ============================================================
@@ -185,6 +186,11 @@ elseif role == "detector" then
     print("Also needs: Advanced Peripherals Player Detector.")
 elseif role == "alarm" then
     print("Wire the configured redstone output to your sirens/lights.")
+elseif role == "action" then
+    print("Also needs: disk drive. Optional: advanced monitor (touchable)")
+    print("and a panic button wired to a redstone input side.")
+    print("This terminal is card-authenticated: card holder clearance")
+    print("determines what actions are shown.")
 elseif role == "radmin" then
     print("You need the 'admin' passcode set on the mainframe first.")
 end

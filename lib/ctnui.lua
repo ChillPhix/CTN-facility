@@ -223,4 +223,176 @@ function M.confirm(msg)
     return s == "YES"
 end
 
+-- ============================================================
+-- Touch/click button framework
+-- ============================================================
+-- Each button is a rectangular region with a label. Call drawButton to
+-- render it, then waitForClick to block until any button is hit or an
+-- external event arrives.
+
+--- Draw a button. Returns the button descriptor for hit-testing.
+-- @param t           target (term or monitor)
+-- @param x, y, w, h  bounds
+-- @param label       button text
+-- @param opts        {fg, bg, selected=bool, disabled=bool, hotkey="a"}
+function M.drawButton(t, x, y, w, h, label, opts)
+    t = M.target(t); opts = opts or {}
+    local bg = opts.bg or (opts.selected and M.FG or M.BG)
+    local fg = opts.fg or (opts.selected and M.BG or M.FG)
+    if opts.disabled then bg = M.BG; fg = M.DIM end
+
+    -- Fill
+    t.setBackgroundColor(bg); t.setTextColor(fg)
+    for i = 0, h - 1 do
+        t.setCursorPos(x, y + i); t.write(string.rep(" ", w))
+    end
+
+    -- Border
+    local bc = opts.disabled and M.DIM or (opts.selected and M.ACCENT or M.BORDER)
+    t.setTextColor(bc)
+    t.setCursorPos(x, y);         t.write("+"..string.rep("-", w-2).."+")
+    t.setCursorPos(x, y + h - 1); t.write("+"..string.rep("-", w-2).."+")
+    for i = 1, h - 2 do
+        t.setCursorPos(x, y + i);         t.write("|")
+        t.setCursorPos(x + w - 1, y + i); t.write("|")
+    end
+
+    -- Label centered
+    t.setBackgroundColor(bg); t.setTextColor(fg)
+    local ly = y + math.floor(h / 2)
+    local lx = x + math.max(1, math.floor((w - #label) / 2))
+    t.setCursorPos(lx, ly); t.write(label)
+
+    -- Hotkey hint (bottom-right)
+    if opts.hotkey then
+        t.setCursorPos(x + w - 3, y + h - 1)
+        t.setTextColor(M.DIM); t.write("["..opts.hotkey:upper().."]")
+    end
+
+    t.setBackgroundColor(M.BG); t.setTextColor(M.FG)
+    return {x=x, y=y, w=w, h=h, label=label, hotkey=opts.hotkey, disabled=opts.disabled}
+end
+
+--- Test whether (cx, cy) is inside a button.
+function M.hit(btn, cx, cy)
+    return not btn.disabled
+       and cx >= btn.x and cx < btn.x + btn.w
+       and cy >= btn.y and cy < btn.y + btn.h
+end
+
+--- Wait for a click/touch on any of the buttons, or pass through any
+--- other event. Returns (buttonIndex) on hit, or (nil, event, ...) on
+--- other events so the caller can still react to rednet/disk/etc.
+-- @param buttons  list of button descriptors from drawButton
+-- @param monTarget  optional monitor peripheral (pass if buttons drawn on monitor)
+function M.waitForClick(buttons, monTarget)
+    while true do
+        local evt = {os.pullEvent()}
+        local etype = evt[1]
+        if etype == "mouse_click" then
+            local cx, cy = evt[3], evt[4]
+            for i, b in ipairs(buttons) do
+                if M.hit(b, cx, cy) then return i end
+            end
+        elseif etype == "monitor_touch" then
+            -- evt[2] is monitor side; evt[3], evt[4] are coords
+            for i, b in ipairs(buttons) do
+                if M.hit(b, evt[3], evt[4]) then return i end
+            end
+        elseif etype == "char" then
+            local key = evt[2]:lower()
+            for i, b in ipairs(buttons) do
+                if b.hotkey and b.hotkey:lower() == key then return i end
+            end
+        else
+            return nil, table.unpack(evt)
+        end
+    end
+end
+
+--- Like waitForClick but only for buttons + hotkeys. Blocks until one is hit.
+function M.clickMenu(buttons)
+    while true do
+        local choice = M.waitForClick(buttons)
+        if choice then return choice end
+    end
+end
+
+-- ============================================================
+-- Layout helpers
+-- ============================================================
+
+--- Automatically lay out a grid of button labels.
+-- @param t       target
+-- @param labels  list of strings
+-- @param opts    {startY=4, cols=1, padY=1, btnH=3, hotkeys=bool}
+-- @return list of button descriptors in the same order as labels
+function M.buttonGrid(t, labels, opts)
+    t = M.target(t); opts = opts or {}
+    local w, _ = t.getSize()
+    local cols = opts.cols or (w >= 40 and 2 or 1)
+    local startY = opts.startY or 5
+    local btnH = opts.btnH or 3
+    local padY = opts.padY or 0
+    local padX = 2
+    local btnW = math.floor((w - padX * (cols + 1)) / cols)
+
+    local buttons = {}
+    for i, label in ipairs(labels) do
+        local col = (i - 1) % cols
+        local row = math.floor((i - 1) / cols)
+        local x = padX + col * (btnW + padX)
+        local y = startY + row * (btnH + padY)
+        local hotkey
+        if opts.hotkeys then
+            if i <= 9 then hotkey = tostring(i)
+            else hotkey = string.char(96 + i - 9) end  -- a, b, c...
+        end
+        buttons[i] = M.drawButton(t, x, y, btnW, btnH, label, {hotkey=hotkey})
+    end
+    return buttons
+end
+
+-- ============================================================
+-- Ornamented header variants (looks better)
+-- ============================================================
+
+--- Large warning banner for lockdown/breach states.
+function M.alertBanner(t, state, subtitle)
+    t = M.target(t)
+    local w = select(1, t.getSize())
+    local colors_by_state = {
+        lockdown = {bg=M.ERR, fg=M.BG,  title="!! FACILITY LOCKDOWN !!"},
+        breach   = {bg=M.ERR, fg=M.BG,  title="!! CONTAINMENT BREACH !!"},
+        warning  = {bg=M.WARN, fg=M.BG, title="** SECURITY ALERT **"},
+        caution  = {bg=M.WARN, fg=M.BG, title="* CAUTION *"},
+    }
+    local spec = colors_by_state[state]
+    if not spec then return end
+
+    -- Top banner
+    t.setCursorPos(1, 1); t.setBackgroundColor(spec.bg); t.setTextColor(spec.fg)
+    t.write(string.rep(" ", w))
+    t.setCursorPos(math.max(1, math.floor((w - #spec.title)/2)+1), 1); t.write(spec.title)
+
+    t.setCursorPos(1, 2); t.setBackgroundColor(spec.bg); t.setTextColor(spec.fg)
+    t.write(string.rep(" ", w))
+    if subtitle then
+        local st = subtitle:sub(1, w - 2)
+        t.setCursorPos(math.max(1, math.floor((w - #st)/2)+1), 2); t.write(st)
+    end
+
+    t.setCursorPos(1, 3); t.setBackgroundColor(M.BG); t.setTextColor(spec.bg)
+    t.write(string.rep("=", w))
+    t.setBackgroundColor(M.BG); t.setTextColor(M.FG)
+end
+
+--- Mini badge (for small status indicators in corners etc.)
+function M.badge(t, x, y, label, fg, bg)
+    t = M.target(t)
+    t.setCursorPos(x, y); t.setBackgroundColor(bg or M.FG); t.setTextColor(fg or M.BG)
+    t.write(" "..label.." ")
+    t.setBackgroundColor(M.BG); t.setTextColor(M.FG)
+end
+
 return M

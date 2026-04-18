@@ -108,22 +108,22 @@ local handlers = {}
 function handlers.auth_request(from, payload)
     local doorName, door = db.getDoorByTerminal(from)
     if not door then
-        db.log("security", "auth_request from unregistered terminal", {from=from})
+        db.logFrom("security", "auth from unregistered terminal", from, {})
         return {granted=false, reason="unregistered_terminal"}
     end
 
     local person, diskOrErr = db.lookupDisk(payload.diskID)
     if not person then
-        db.log("access", "denied: bad disk", {
-            terminal=from, door=doorName, diskID=payload.diskID, reason=diskOrErr
+        db.logFrom("access", "DENIED: bad disk", from, {
+            door=doorName, diskID=payload.diskID, reason=diskOrErr
         })
         return {granted=false, reason=diskOrErr or "bad_disk"}
     end
 
     local ok, reason = db.checkAccess(person, door)
-    db.log("access", ok and "GRANTED" or "DENIED", {
-        terminal=from, door=doorName, person=person.name,
-        clearance=person.clearance, dept=person.department, reason=reason,
+    db.logFrom("access", (ok and "GRANTED: " or "DENIED: ")..person.name.." @ "..doorName, from, {
+        door=doorName, actor=person.name,
+        clearance=person.clearance, department=person.department, reason=reason,
     })
 
     return {
@@ -146,6 +146,7 @@ function handlers.announce(from, payload)
     if data.alarms[from] then return {ok=true, known=true, kind="alarm"} end
     if data.detectors[from] then return {ok=true, known=true, kind="detector"} end
     if data.chambers[from] then return {ok=true, known=true, kind="chamber"} end
+    if data.actions and data.actions[from] then return {ok=true, known=true, kind="action"} end
     if data.pending[from] then return {ok=true, pending=true} end
 
     db.addPending(from, payload.type, payload.hostname)
@@ -156,20 +157,21 @@ end
 -- Issuer: {passcode, diskID, playerName, clearance, department, issuedBy}
 function handlers.issue_request(from, payload)
     if not db.checkPasscode("issuer", payload.passcode) then
-        db.log("security", "ISSUER: bad passcode", {from=from, attempted=payload.issuedBy or "?"})
+        db.logFrom("security", "ISSUER: bad passcode", from, {attempted=payload.issuedBy or "?"})
         return {ok=false, reason="bad_passcode"}
     end
 
     local data = db.get()
     if not data.personnel[payload.playerName] then
         db.addPerson(payload.playerName, payload.clearance, payload.department, {})
-        db.log("admin", "person created", {name=payload.playerName, by=payload.issuedBy})
+        db.logFrom("admin", "person created: "..payload.playerName, from,
+            {name=payload.playerName, by=payload.issuedBy})
     end
 
     local ok, err = db.issueDisk(payload.diskID, payload.playerName, payload.issuedBy)
     if not ok then return {ok=false, reason=err} end
 
-    db.log("admin", "card issued", {
+    db.logFrom("admin", "card issued to "..payload.playerName.." by "..(payload.issuedBy or "?"), from, {
         diskID=payload.diskID, owner=payload.playerName, by=payload.issuedBy
     })
     return {ok=true}
@@ -181,15 +183,19 @@ function handlers.doc_request(from, payload)
     if not person then return {ok=false, reason="bad_disk"} end
 
     if payload.action == "list" then
+        db.logFrom("docs", "archive browsed by "..person.name, from,
+            {actor=person.name, clearance=person.clearance})
         return {ok=true, docs=db.listDocuments(person.clearance),
                 person={name=person.name, clearance=person.clearance}}
     elseif payload.action == "read" then
         local doc, err = db.getDocument(payload.docId, person.clearance)
         if not doc then
-            db.log("docs", "read denied", {person=person.name, docId=payload.docId, reason=err})
+            db.logFrom("docs", "read denied: "..tostring(payload.docId).." to "..person.name, from,
+                {actor=person.name, docId=payload.docId, reason=err})
             return {ok=false, reason=err}
         end
-        db.log("docs", "read", {person=person.name, docId=payload.docId})
+        db.logFrom("docs", "read: "..payload.docId.." by "..person.name, from,
+            {actor=person.name, docId=payload.docId})
         return {ok=true, doc=doc}
     end
     return {ok=false, reason="unknown_action"}
@@ -364,6 +370,170 @@ function handlers.chamber_info(from, payload)
     return result
 end
 
+-- Card-authenticated entity list for action terminals (L3+ only)
+function handlers.entity_list_by_card(from, payload)
+    local person = db.lookupDisk(payload.diskID)
+    if not person then return {ok=false, reason="bad_card"} end
+    if person.clearance > 3 then return {ok=false, reason="insufficient_clearance"} end
+    return {ok=true, entities=db.listEntities(), person={name=person.name, clearance=person.clearance}}
+end
+
+-- ============================================================
+-- Action terminal commands (card-swipe authenticated).
+-- These are fired by facility-wide action terminals when personnel
+-- swipe their ID and pick an action. Authorization is by the card
+-- owner's clearance, NOT a passcode.
+-- Payload: {diskID, action, args?}
+-- ============================================================
+
+-- Minimum clearance (LOWER = HIGHER access; e.g. 3 means L0-L3 allowed).
+local ACTION_CLEARANCE = {
+    view_status         = 5,   -- anyone with a valid card
+    security_breach     = 4,   -- Security/Researcher+
+    declare_breach      = 3,   -- Captain/Research Director+
+    end_breach          = 2,   -- Director+
+    zone_lockdown       = 3,   -- Captain+ can lockdown ANY zone from here
+    zone_unlock         = 2,   -- Director+ can unlock
+    facility_lockdown   = 1,   -- Ethical Board+
+    facility_normal     = 1,   -- Ethical Board+
+}
+
+local function authorizeCard(diskID, action)
+    local person = db.lookupDisk(diskID)
+    if not person then return nil, "bad_card" end
+    local required = ACTION_CLEARANCE[action]
+    if not required then return nil, "unknown_action" end
+    if person.clearance > required then return nil, "insufficient_clearance" end
+    return person
+end
+
+function handlers.action_command(from, payload)
+    local actionTerm = db.getActionTerminal(from)
+    if not actionTerm then
+        db.logFrom("security", "action from unregistered terminal", from, {})
+        return {ok=false, reason="unregistered_terminal"}
+    end
+
+    local person, err = authorizeCard(payload.diskID, payload.action)
+    if not person then
+        db.logFrom("security", "action denied: "..payload.action, from,
+            {reason=err, action=payload.action})
+        return {ok=false, reason=err}
+    end
+
+    local meta = {
+        action      = payload.action,
+        actor       = person.name,
+        clearance   = person.clearance,
+        department  = person.department,
+        terminal_zone = actionTerm.zone,
+        terminal_label = actionTerm.label,
+    }
+
+    -- Execute the action
+    if payload.action == "view_status" then
+        local data = db.get()
+        db.logFrom("action", "status viewed", from, meta)
+        return {ok=true, facility=data.facility, zones=data.zones,
+                breaches=db.activeBreaches(), person={name=person.name, clearance=person.clearance}}
+
+    elseif payload.action == "security_breach" then
+        -- Non-containment threat - hostile/intruder
+        db.setFacilityState("warning")
+        pulseAlarms(actionTerm.zone, "pulse")
+        db.logFrom("facility", ">>> SECURITY BREACH <<< raised by "..person.name, from, meta)
+        broadcastFacilityAlert()
+        return {ok=true, effect="SECURITY BREACH RAISED"}
+
+    elseif payload.action == "declare_breach" then
+        -- Containment breach - needs entity ID
+        if not payload.args or not payload.args.entityId then
+            return {ok=false, reason="missing_entity"}
+        end
+        local entityId = payload.args.entityId
+        local ent = db.getEntity(entityId)
+        if not ent then return {ok=false, reason="unknown_entity"} end
+        db.declareBreach(entityId, ent.zone, person.name)
+        db.setFacilityState("breach")
+        db.setZoneLockdown(ent.zone, true)
+        db.setEntityStatus(entityId, "breached")
+        pulseAlarms(nil, "pulse")
+        local cid = db.getChamberByEntity(entityId)
+        if cid then proto.send(cid, "chamber_alert", {status="breached"}) end
+        meta.entity = entityId
+        db.logFrom("facility", ">>> CONTAINMENT BREACH <<< "..entityId.." by "..person.name, from, meta)
+        broadcastFacilityAlert()
+        return {ok=true, effect="BREACH DECLARED: "..entityId}
+
+    elseif payload.action == "end_breach" then
+        if not payload.args or not payload.args.entityId then
+            return {ok=false, reason="missing_entity"}
+        end
+        db.endBreach(payload.args.entityId)
+        db.setEntityStatus(payload.args.entityId, "contained")
+        local cid = db.getChamberByEntity(payload.args.entityId)
+        if cid then proto.send(cid, "chamber_alert", {status="contained"}) end
+        if #db.activeBreaches() == 0 then
+            db.setFacilityState("normal")
+            pulseAlarms(nil, "off")
+        end
+        meta.entity = payload.args.entityId
+        db.logFrom("facility", "breach contained: "..payload.args.entityId.." by "..person.name, from, meta)
+        broadcastFacilityAlert()
+        return {ok=true, effect="BREACH CONTAINED"}
+
+    elseif payload.action == "zone_lockdown" then
+        local zone = (payload.args and payload.args.zone) or actionTerm.zone
+        db.setZoneLockdown(zone, true)
+        pulseAlarms(zone, "pulse")
+        meta.zone_affected = zone
+        db.logFrom("facility", "zone lockdown: "..zone.." by "..person.name, from, meta)
+        broadcastFacilityAlert()
+        return {ok=true, effect="LOCKDOWN: "..zone}
+
+    elseif payload.action == "zone_unlock" then
+        local zone = (payload.args and payload.args.zone) or actionTerm.zone
+        db.setZoneLockdown(zone, false)
+        pulseAlarms(zone, "off")
+        meta.zone_affected = zone
+        db.logFrom("facility", "zone unlock: "..zone.." by "..person.name, from, meta)
+        broadcastFacilityAlert()
+        return {ok=true, effect="UNLOCKED: "..zone}
+
+    elseif payload.action == "facility_lockdown" then
+        db.setFacilityState("lockdown")
+        pulseAlarms(nil, "pulse")
+        db.logFrom("facility", ">>> FACILITY LOCKDOWN <<< by "..person.name, from, meta)
+        broadcastFacilityAlert()
+        return {ok=true, effect="FACILITY LOCKDOWN ACTIVE"}
+
+    elseif payload.action == "facility_normal" then
+        db.setFacilityState("normal")
+        pulseAlarms(nil, "off")
+        db.logFrom("facility", "facility restored to NORMAL by "..person.name, from, meta)
+        broadcastFacilityAlert()
+        return {ok=true, effect="FACILITY NORMAL"}
+    end
+
+    return {ok=false, reason="unknown_action"}
+end
+
+-- Panic button: a redstone-triggered action terminal fires this without a card.
+-- It's hard-coded to security_breach severity so it can't be escalated without a swipe.
+function handlers.panic_button(from, payload)
+    local actionTerm = db.getActionTerminal(from)
+    if not actionTerm then
+        db.logFrom("security", "PANIC from unregistered terminal", from, {})
+        return {ok=false, reason="unregistered_terminal"}
+    end
+    db.setFacilityState("warning")
+    pulseAlarms(actionTerm.zone, "pulse")
+    db.logFrom("facility", ">>> PANIC BUTTON <<< at "..actionTerm.zone, from,
+        {terminal_label=actionTerm.label, terminal_zone=actionTerm.zone})
+    broadcastFacilityAlert()
+    return {ok=true}
+end
+
 -- ============================================================
 -- Remote admin commands
 -- Payload: {passcode, action, args, issuedBy}
@@ -418,6 +588,16 @@ adminActions.add_chamber = function(args)
     db.addChamber(args.terminalId, args.entityId, args.zone)
     db.removePending(args.terminalId)
     return {ok=true}
+end
+
+adminActions.add_action = function(args)
+    db.addActionTerminal(args.terminalId, args.zone, args.label)
+    db.removePending(args.terminalId)
+    return {ok=true}
+end
+
+adminActions.list_actions = function()
+    return {ok=true, actions=db.listActionTerminals()}
 end
 
 adminActions.add_entity = function(args)
