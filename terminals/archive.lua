@@ -7,6 +7,7 @@ package.path = package.path .. ";/lib/?.lua"
 local proto = require("ctnproto")
 local ui    = require("ctnui")
 local cfg   = require("ctnconfig")
+local gpu   = require("ctngpu")
 
 local myCfg = cfg.loadOrWizard("archive", {
     {key="mainframe_id", prompt="Mainframe computer ID", type="number", default=1},
@@ -23,6 +24,12 @@ end
 
 local drive = findPeripheral("drive")
 if not drive then error("No disk drive attached.") end
+
+local printer = findPeripheral("printer")
+local display = gpu.openBackend({preferGpu=true})
+if display and display.mode == "term" then display = false end
+local lastButtons = {}
+local lastDocButtons = {}
 
 local function waitForDisk()
     ui.frame(term.current(), "DOCUMENT ARCHIVE", "INSERT ID CARD")
@@ -60,6 +67,12 @@ local function pathText(path)
     return s
 end
 
+local function trimLine(s, n)
+    s = tostring(s or "")
+    if #s <= n then return s end
+    return s:sub(1, math.max(1, n - 3)).."..."
+end
+
 local function makeItems(archive)
     local items = {}
     local folder = archive.folder or {id="root"}
@@ -84,6 +97,7 @@ local function drawBrowser(reply, selected, top)
     local w, h = term.getSize()
 
     ui.frame(term.current(), "ARCHIVE", person.name.."  //  L"..person.clearance)
+    lastButtons = {}
     term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
     term.write(pathText(archive.path):sub(1, w - 3))
 
@@ -105,6 +119,7 @@ local function drawBrowser(reply, selected, top)
             local item = items[idx]
             if not item then break end
             local y = 7 + row
+            lastButtons[#lastButtons+1] = {x=2, y=y, w=w-2, h=1, index=idx}
             local isSelected = idx == selected
             term.setCursorPos(2, y)
             if isSelected then
@@ -131,6 +146,50 @@ local function drawBrowser(reply, selected, top)
     term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM)
     term.write("arrows=move  ENTER=open  BACKSPACE=up  Q=eject")
     ui.footer(term.current(), "C.T.N ARCHIVE // "..#(archive.folders or {}).." folders // "..#(archive.documents or {}).." docs")
+
+    if display then
+        local ok = pcall(function()
+            display:clear(gpu.COLORS.bg)
+            local dw, dh = display:size()
+            gpu.header(display, "C.T.N ARCHIVE", pathText(archive.path))
+            if display.mode == "gpu" then
+                local p = gpu.panel(display, 8, 44, dw - 16, dh - 60, "FILES // "..person.name.." L"..person.clearance, "normal")
+                local y = p.contentY + 4
+                local rowH = 16
+                local visible = math.floor((p.h - 24) / rowH)
+                for row = 1, visible do
+                    local idx = top + row - 1
+                    local item = items[idx]
+                    if not item then break end
+                    local bg = idx == selected and gpu.COLORS.dim or gpu.COLORS.panelBg
+                    display:fillRect(p.x + 4, y - 2, p.w - 8, rowH, bg)
+                    local kind = item.kind == "folder" and "DIR" or item.kind == "doc" and "DOC" or "UP"
+                    local col = item.locked and gpu.COLORS.err or (item.kind == "folder" and gpu.COLORS.accent2 or gpu.COLORS.fg)
+                    display:text(p.x + 10, y, kind, gpu.COLORS.dim, 10, "bold")
+                    display:text(p.x + 50, y, item.locked and "LOCK" or ("L"..tostring(item.minClearance or "-")), col, 10, "bold")
+                    display:text(p.x + 100, y, trimLine(item.label, math.floor((p.w - 120) / 6)), col, 10, "plain")
+                    y = y + rowH
+                end
+                display:text(12, dh - 14, "Mouse/touch on computer screen. P prints open records.", gpu.COLORS.dim, 10, "plain")
+            else
+                local p = gpu.panel(display, 1, 3, dw, dh - 3, "FILES", "normal")
+                local y = p.contentY
+                local visible = p.h - 3
+                for row = 1, visible do
+                    local idx = top + row - 1
+                    local item = items[idx]
+                    if not item then break end
+                    local col = item.locked and gpu.COLORS.err or gpu.COLORS.fg
+                    local marker = idx == selected and ">" or " "
+                    local kind = item.kind == "folder" and "[D]" or item.kind == "doc" and "[F]" or "[^]"
+                    display:text(p.x + 1, y, trimLine(marker.." "..kind.." "..item.label, p.w - 2), col)
+                    y = y + 1
+                end
+            end
+            display:update()
+        end)
+        if not ok then display = false end
+    end
     return items, selected, top
 end
 
@@ -166,6 +225,51 @@ local function wrapText(text, width)
     return lines
 end
 
+local function printDoc(doc)
+    if not printer then
+        ui.bigStatus(term.current(), {"NO PRINTER", "", "Attach a printer peripheral."}, "denied")
+        sleep(1.5)
+        return false
+    end
+
+    local ok, err = pcall(function()
+        if not printer.newPage() then error("printer_not_ready") end
+        local pw, ph = printer.getPageSize()
+        printer.setPageTitle((doc.title or doc.id or "CTN Record"):sub(1, 32))
+        printer.setCursorPos(1, 1)
+        printer.write("C.T.N ARCHIVE RECORD")
+        printer.setCursorPos(1, 2)
+        printer.write(trimLine((doc.id or "?").." - "..(doc.title or ""), pw))
+        printer.setCursorPos(1, 3)
+        printer.write(trimLine("Clearance L"..tostring(doc.minClearance or "?").."  Author: "..tostring(doc.author or "?"), pw))
+        printer.setCursorPos(1, 4)
+        printer.write(string.rep("-", pw))
+
+        local lines = wrapText(doc.body or "", pw)
+        local y = 5
+        for _, line in ipairs(lines) do
+            if y > ph then
+                printer.endPage()
+                if not printer.newPage() then error("printer_out_of_paper") end
+                printer.setPageTitle((doc.title or doc.id or "CTN Record"):sub(1, 32))
+                y = 1
+            end
+            printer.setCursorPos(1, y)
+            printer.write(line:sub(1, pw))
+            y = y + 1
+        end
+        printer.endPage()
+    end)
+
+    if ok then
+        ui.bigStatus(term.current(), {"PRINT SENT", "", doc.id or "RECORD"}, "granted")
+    else
+        ui.bigStatus(term.current(), {"PRINT FAILED", "", tostring(err)}, "error")
+    end
+    sleep(1.5)
+    return ok
+end
+
 local function viewDoc(diskID, docId)
     ui.bigStatus(term.current(), {"LOADING RECORD..."}, "working")
     local reply = readRequest(diskID, docId)
@@ -181,6 +285,10 @@ local function viewDoc(diskID, docId)
 
     while true do
         ui.frame(term.current(), doc.title or doc.id, "L"..(doc.minClearance or "?").." RECORD")
+        lastDocButtons = {
+            back = {x=2, y=h-3, w=math.floor((w-4)/2), h=1},
+            print = {x=3+math.floor((w-4)/2), y=h-3, w=w-3-math.floor((w-4)/2), h=1},
+        }
         term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
         term.write(("ID: "..doc.id.."  AUTHOR: "..tostring(doc.author or "?")):sub(1, w - 3))
         term.setCursorPos(2, 5); term.setTextColor(ui.BORDER)
@@ -194,14 +302,60 @@ local function viewDoc(diskID, docId)
             term.write(line:sub(1, w - 4))
         end
 
+        ui.drawButton(term.current(), lastDocButtons.back.x, lastDocButtons.back.y, lastDocButtons.back.w, 1, "BACK", {hotkey="b"})
+        ui.drawButton(term.current(), lastDocButtons.print.x, lastDocButtons.print.y, lastDocButtons.print.w, 1, "PRINT", {hotkey="p", disabled=not printer})
         term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM)
-        term.write("arrows/page=scroll  BACKSPACE=back")
-        local _, key = os.pullEvent("key")
-        if key == keys.up and scroll > 0 then scroll = scroll - 1
-        elseif key == keys.down and scroll < math.max(0, #body - visible) then scroll = scroll + 1
-        elseif key == keys.pageUp then scroll = math.max(0, scroll - visible)
-        elseif key == keys.pageDown then scroll = math.min(math.max(0, #body - visible), scroll + visible)
-        elseif key == keys.backspace then return end
+        term.write("arrows/page=scroll  BACKSPACE=back  P=print")
+
+        if display then
+            local ok = pcall(function()
+                display:clear(gpu.COLORS.bg)
+                local dw, dh = display:size()
+                gpu.header(display, doc.title or doc.id, "L"..(doc.minClearance or "?").." // "..doc.id)
+                if display.mode == "gpu" then
+                    local p = gpu.panel(display, 8, 44, dw - 16, dh - 60, "RECORD BODY", "normal")
+                    local y = p.contentY + 4
+                    local lines = wrapText(doc.body or "", math.floor((p.w - 24) / 6))
+                    for i = 1, math.floor((p.h - 20) / 12) do
+                        local line = lines[scroll + i]
+                        if not line then break end
+                        display:text(p.x + 12, y, line, gpu.COLORS.fg, 10, "plain")
+                        y = y + 12
+                    end
+                    display:text(12, dh - 14, printer and "P prints this record." or "No printer attached.", gpu.COLORS.dim, 10, "plain")
+                else
+                    local p = gpu.panel(display, 1, 3, dw, dh - 3, "RECORD", "normal")
+                    local lines = wrapText(doc.body or "", p.w - 2)
+                    for i = 1, p.h - 3 do
+                        local line = lines[scroll + i]
+                        if not line then break end
+                        display:text(p.x + 1, p.contentY + i - 1, line, gpu.COLORS.fg)
+                    end
+                end
+                display:update()
+            end)
+            if not ok then display = false end
+        end
+
+        local evt = {os.pullEvent()}
+        if evt[1] == "key" then
+            local key = evt[2]
+            if key == keys.up and scroll > 0 then scroll = scroll - 1
+            elseif key == keys.down and scroll < math.max(0, #body - visible) then scroll = scroll + 1
+            elseif key == keys.pageUp then scroll = math.max(0, scroll - visible)
+            elseif key == keys.pageDown then scroll = math.min(math.max(0, #body - visible), scroll + visible)
+            elseif key == keys.backspace or key == keys.b then return
+            elseif key == keys.p then
+                printDoc(doc)
+            end
+        elseif evt[1] == "mouse_scroll" then
+            local dir = evt[2]
+            scroll = math.max(0, math.min(math.max(0, #body - visible), scroll + dir))
+        elseif evt[1] == "mouse_click" then
+            local x, y = evt[3], evt[4]
+            if ui.hit(lastDocButtons.back, x, y) then return end
+            if printer and ui.hit(lastDocButtons.print, x, y) then printDoc(doc) end
+        end
     end
 end
 
@@ -223,38 +377,62 @@ local function archiveSession(diskID)
             while drive.getDiskID() do
                 local items
                 items, selected, top = drawBrowser(reply, selected, top)
-                local _, key = os.pullEvent("key")
-                if key == keys.up and selected > 1 then
-                    selected = selected - 1
-                    if selected < top then top = selected end
-                elseif key == keys.down and selected < #items then
-                    selected = selected + 1
-                    local rows = select(2, term.getSize()) - 10
-                    if selected >= top + rows then top = top + 1 end
-                elseif key == keys.enter and items[selected] then
-                    local item = items[selected]
+                local evt = {os.pullEvent()}
+                local function openItem(item)
+                    if not item then return false end
                     if item.kind == "back" then
                         folderId = item.target
                         selected, top = 1, 1
-                        break
+                        return true
                     elseif item.locked then
                         denied(item.kind == "folder" and "folder_restricted" or "insufficient_clearance")
                     elseif item.kind == "folder" then
                         folderId = item.id
                         selected, top = 1, 1
-                        break
+                        return true
                     elseif item.kind == "doc" then
                         viewDoc(diskID, item.id)
                     end
-                elseif key == keys.backspace then
-                    local parent = reply.archive and reply.archive.folder and reply.archive.folder.parent
-                    if parent then
-                        folderId = parent
-                        selected, top = 1, 1
+                    return false
+                end
+
+                if evt[1] == "key" then
+                    local key = evt[2]
+                    if key == keys.up and selected > 1 then
+                        selected = selected - 1
+                        if selected < top then top = selected end
+                    elseif key == keys.down and selected < #items then
+                        selected = selected + 1
+                        local rows = select(2, term.getSize()) - 10
+                        if selected >= top + rows then top = top + 1 end
+                    elseif key == keys.enter and items[selected] then
+                        if openItem(items[selected]) then break end
+                    elseif key == keys.backspace then
+                        local parent = reply.archive and reply.archive.folder and reply.archive.folder.parent
+                        if parent then
+                            folderId = parent
+                            selected, top = 1, 1
+                            break
+                        end
+                    elseif key == keys.q then
+                        return
+                    end
+                elseif evt[1] == "mouse_click" then
+                    local x, y = evt[3], evt[4]
+                    for _, btn in ipairs(lastButtons) do
+                        if ui.hit(btn, x, y) then
+                            selected = btn.index
+                            if openItem(items[selected]) then break end
+                        end
+                    end
+                    if folderId ~= (reply.archive.folder and reply.archive.folder.id) then
                         break
                     end
-                elseif key == keys.q then
-                    return
+                elseif evt[1] == "mouse_scroll" then
+                    local dir = evt[2]
+                    local rows = select(2, term.getSize()) - 10
+                    top = math.max(1, math.min(math.max(1, #items - rows + 1), top + dir))
+                    selected = math.max(top, math.min(selected, top + rows - 1))
                 end
             end
         end

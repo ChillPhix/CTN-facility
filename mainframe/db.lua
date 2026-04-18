@@ -398,6 +398,21 @@ function M.addFolder(parentId, name, minClearance, author)
     return id
 end
 
+function M.deleteFolder(folderId_)
+    ensureArchiveSchema()
+    if not folderId_ or folderId_ == "root" then return false, "cannot_delete_root" end
+    if not data.archiveFolders[folderId_] then return false, "folder_not_found" end
+    for _, f in pairs(data.archiveFolders) do
+        if f.parent == folderId_ then return false, "folder_not_empty" end
+    end
+    for _, doc in pairs(data.documents) do
+        if doc.folderId == folderId_ then return false, "folder_not_empty" end
+    end
+    data.archiveFolders[folderId_] = nil
+    M.save()
+    return true
+end
+
 function M.listArchiveChildren(folderId_, clearance)
     ensureArchiveSchema()
     local fid = folderId_ or "root"
@@ -483,6 +498,14 @@ function M.addDocument(id, title, folder, minClearance, body, author)
         created = os.epoch("utc"),
     }
     M.save()
+end
+
+function M.deleteDocument(id)
+    ensureArchiveSchema()
+    if not data.documents[id] then return false, "not_found" end
+    data.documents[id] = nil
+    M.save()
+    return true
 end
 
 function M.listDocuments(clearance)

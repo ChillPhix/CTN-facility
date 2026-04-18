@@ -81,6 +81,20 @@ local function chooseArchiveFolder(title)
     end
 end
 
+local function archiveItems(archive)
+    local items = {}
+    if archive.folder and archive.folder.parent then
+        items[#items+1] = {kind="back", label="..", id=archive.folder.parent}
+    end
+    for _, f in ipairs(archive.folders or {}) do
+        items[#items+1] = {kind="folder", label=f.name, id=f.id, minClearance=f.minClearance}
+    end
+    for _, d in ipairs(archive.documents or {}) do
+        items[#items+1] = {kind="doc", label=d.title, id=d.id, minClearance=d.minClearance}
+    end
+    return items
+end
+
 local menu = {}
 
 menu.addPerson = function()
@@ -270,6 +284,84 @@ menu.addFolder = function()
     sleep(1.5)
 end
 
+menu.deleteArchiveItem = function()
+    local folderId = "root"
+    local selected, top = 1, 1
+    while true do
+        local archive = db.listArchiveChildren(folderId, 0)
+        archive.path = db.getArchivePath(folderId)
+        local items = archiveItems(archive)
+        local w, h = term.getSize()
+        local rows = h - 10
+        if rows < 3 then rows = 3 end
+        selected = math.max(1, math.min(selected, math.max(1, #items)))
+        if selected < top then top = selected end
+        if selected >= top + rows then top = selected - rows + 1 end
+
+        ui.frame(term.current(), "ARCHIVE MANAGER", "ENTER=open  D=delete  Q=back")
+        term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
+        term.write(archivePathLabel(archive.path):sub(1, w - 3))
+        term.setCursorPos(2, 6); term.setTextColor(ui.ACCENT)
+        term.write("TYPE     ACCESS  NAME")
+        for row = 1, rows do
+            local idx = top + row - 1
+            local item = items[idx]
+            if not item then break end
+            term.setCursorPos(2, 6 + row)
+            if idx == selected then
+                term.setBackgroundColor(ui.FG); term.setTextColor(ui.BG)
+            else
+                term.setBackgroundColor(ui.BG); term.setTextColor(ui.FG)
+            end
+            local typ = item.kind == "folder" and "FOLDER" or item.kind == "doc" and "DOC" or "BACK"
+            local acc = item.kind == "back" and "--" or ("L"..tostring(item.minClearance or 5))
+            local name = item.kind == "folder" and ("["..item.label.."]") or item.label
+            local line = string.format("%-8s %-7s %s", typ, acc, name)
+            term.write(line:sub(1, w - 3))
+            term.write(string.rep(" ", math.max(0, w - 2 - #line)))
+            term.setBackgroundColor(ui.BG)
+        end
+        term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM)
+        term.write("Folders must be empty before deletion.")
+
+        local _, key = os.pullEvent("key")
+        if key == keys.up and selected > 1 then
+            selected = selected - 1
+        elseif key == keys.down and selected < #items then
+            selected = selected + 1
+        elseif key == keys.enter and items[selected] then
+            local item = items[selected]
+            if item.kind == "back" or item.kind == "folder" then
+                folderId = item.id; selected, top = 1, 1
+            end
+        elseif key == keys.d and items[selected] then
+            local item = items[selected]
+            if item.kind ~= "back" then
+                ui.clear(term.current())
+                ui.header(term.current(), "CONFIRM DELETE")
+                term.setCursorPos(2, 5); term.setTextColor(ui.ERR)
+                term.write("Delete "..item.kind..": "..item.label)
+                term.setCursorPos(2, 7); term.setTextColor(ui.FG)
+                term.write("Type DELETE to confirm: "); term.setTextColor(ui.ACCENT)
+                if read() == "DELETE" then
+                    local ok, err
+                    if item.kind == "folder" then ok, err = db.deleteFolder(item.id)
+                    else ok, err = db.deleteDocument(item.id) end
+                    if ok then
+                        ui.bigStatus(term.current(), {"DELETED"}, "granted")
+                    else
+                        ui.bigStatus(term.current(), {"FAILED", "", tostring(err)}, "denied")
+                    end
+                    sleep(1.5)
+                    selected, top = 1, 1
+                end
+            end
+        elseif key == keys.q or key == keys.backspace then
+            return
+        end
+    end
+end
+
 menu.viewLog = function()
     ui.frame(term.current(), "SECURITY AUDIT LOG", "MOST RECENT LAST")
     local entries = db.readLog(40)
@@ -304,6 +396,7 @@ local options = {
     {"Set passcode",        menu.setPasscode},
     {"Add archive folder",  menu.addFolder},
     {"Add document",        menu.addDocument},
+    {"Delete archive item", menu.deleteArchiveItem},
     {"View security log",   menu.viewLog},
     {"Exit",                function() error("exit", 0) end},
 }

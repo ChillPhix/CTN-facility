@@ -18,6 +18,7 @@ Features
 - Alarm/siren nodes with redstone pulse output
 - Player detection via Advanced Peripherals
 - Hierarchical document archive with clearance-gated folders and records
+- Archive terminals support mouse input, monitor/DirectGPU display, and printing
 - Central mainframe with live status monitor
 - Multiple remote admin terminals (no more single point of admin)
 - Control room with dashboard + breach/lockdown controls
@@ -40,7 +41,8 @@ Roles / terminal types
               for breach, lockdown, panic, security, etc. Optional
               redstone out for in-world lights.
 - detector  : player detector reporting zone occupancy
-- archive   : hierarchical document archive browser
+- archive   : hierarchical document archive browser. Optional monitor/
+              DirectGPU display and printer output.
 - action    : facility-wide emergency response terminal. Card-authenticated.
               Clearance determines available actions. Clickable UI.
               Optional panic button via redstone input.
@@ -119,7 +121,8 @@ chamber:   wireless modem. Optional: advanced monitor, disk drive
            (procedure viewing), redstone output (emergency light).
 alarm:     wireless modem + redstone output (wired to sirens/lights).
 detector:  wireless modem + Advanced Peripherals Player Detector.
-archive:   wireless modem + disk drive.
+archive:   wireless modem + disk drive. Optional: advanced monitor or
+           DirectGPU display, printer.
 
 
 CLEARANCE LEVELS
@@ -190,10 +193,12 @@ document has a required clearance level. Folder restrictions inherit
 downward: if a user cannot open a parent folder, they cannot open any
 documents or subfolders inside it.
 
-Archive users insert an ID card at an archive terminal. They can see
-folder names in the current folder, including restricted folders, but
-locked folders and documents cannot be opened without the required
-clearance.
+Archive users insert an ID card at an archive terminal. They can use
+arrow keys, mouse clicks, and mouse wheel scrolling. They can see folder
+names in the current folder, including restricted folders, but locked
+folders and documents cannot be opened without the required clearance.
+If a printer is attached, an open document can be printed with P or the
+PRINT button.
 
 
 TROUBLESHOOTING

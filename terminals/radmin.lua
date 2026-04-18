@@ -198,6 +198,20 @@ local function chooseArchiveFolder(title)
     end
 end
 
+local function archiveItems(archive)
+    local items = {}
+    if archive.folder and archive.folder.parent then
+        items[#items+1] = {kind="back", label="..", id=archive.folder.parent}
+    end
+    for _, f in ipairs(archive.folders or {}) do
+        items[#items+1] = {kind="folder", label=f.name, id=f.id, minClearance=f.minClearance}
+    end
+    for _, d in ipairs(archive.documents or {}) do
+        items[#items+1] = {kind="doc", label=d.title, id=d.id, minClearance=d.minClearance}
+    end
+    return items
+end
+
 -- ============================================================
 -- Login
 -- ============================================================
@@ -507,6 +521,81 @@ menu.addDocument = function()
     }), "DOCUMENT SAVED")
 end
 
+menu.deleteArchiveItem = function()
+    local folderId = "root"
+    local selected, top = 1, 1
+    while true do
+        local r = sendAdmin("browse_archive", {folderId=folderId})
+        if not r or not r.ok then return showResult(r) end
+        local archive = r.archive
+        local items = archiveItems(archive)
+        local w, h = term.getSize()
+        local rows = h - 10
+        if rows < 3 then rows = 3 end
+        selected = math.max(1, math.min(selected, math.max(1, #items)))
+        if selected < top then top = selected end
+        if selected >= top + rows then top = selected - rows + 1 end
+
+        ui.frame(term.current(), "ARCHIVE MANAGER", "ENTER=open  D=delete  Q=back")
+        term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
+        term.write(archivePathLabel(archive.path):sub(1, w - 3))
+        term.setCursorPos(2, 6); term.setTextColor(ui.ACCENT)
+        term.write("TYPE     ACCESS  NAME")
+        for row = 1, rows do
+            local idx = top + row - 1
+            local item = items[idx]
+            if not item then break end
+            term.setCursorPos(2, 6 + row)
+            if idx == selected then
+                term.setBackgroundColor(ui.FG); term.setTextColor(ui.BG)
+            else
+                term.setBackgroundColor(ui.BG); term.setTextColor(ui.FG)
+            end
+            local typ = item.kind == "folder" and "FOLDER" or item.kind == "doc" and "DOC" or "BACK"
+            local acc = item.kind == "back" and "--" or ("L"..tostring(item.minClearance or 5))
+            local name = item.kind == "folder" and ("["..item.label.."]") or item.label
+            local line = string.format("%-8s %-7s %s", typ, acc, name)
+            term.write(line:sub(1, w - 3))
+            term.write(string.rep(" ", math.max(0, w - 2 - #line)))
+            term.setBackgroundColor(ui.BG)
+        end
+        term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM)
+        term.write("Folders must be empty before deletion.")
+
+        local _, key = os.pullEvent("key")
+        if key == keys.up and selected > 1 then
+            selected = selected - 1
+        elseif key == keys.down and selected < #items then
+            selected = selected + 1
+        elseif key == keys.enter and items[selected] then
+            local item = items[selected]
+            if item.kind == "back" then
+                folderId = item.id; selected, top = 1, 1
+            elseif item.kind == "folder" then
+                folderId = item.id; selected, top = 1, 1
+            end
+        elseif key == keys.d and items[selected] then
+            local item = items[selected]
+            if item.kind ~= "back" then
+                ui.clear(term.current())
+                ui.header(term.current(), "CONFIRM DELETE")
+                term.setCursorPos(2, 5); term.setTextColor(ui.ERR)
+                term.write("Delete "..item.kind..": "..item.label)
+                term.setCursorPos(2, 7); term.setTextColor(ui.FG)
+                term.write("Type DELETE to confirm: "); term.setTextColor(ui.ACCENT)
+                if read() == "DELETE" then
+                    local action = item.kind == "folder" and "delete_folder" or "delete_document"
+                    local args = item.kind == "folder" and {folderId=item.id} or {docId=item.id}
+                    showResult(sendAdmin(action, args), "DELETED")
+                    selected, top = 1, 1
+                end
+            end
+        elseif key == keys.q or key == keys.backspace then
+            return
+        end
+    end
+end
+
 menu.setPasscode = function()
     local which = pickFromList("WHICH PASSCODE", {"issuer","control","admin"})
     section("SET "..which:upper().." PASSCODE")
@@ -558,6 +647,7 @@ local options = {
     {"Delete entity",       menu.deleteEntity},
     {"Add archive folder",  menu.addFolder},
     {"Add document",        menu.addDocument},
+    {"Delete archive item", menu.deleteArchiveItem},
     {"Set passcode",        menu.setPasscode},
     {"View security log",   menu.viewLog},
     {"Log out",             function() menu.logout(); login() end},

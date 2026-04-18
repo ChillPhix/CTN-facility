@@ -709,6 +709,18 @@ adminActions.add_folder = function(args)
     return {ok=true, folderId=id}
 end
 
+adminActions.delete_folder = function(args)
+    local ok, err = db.deleteFolder(args.folderId)
+    if not ok then return {ok=false, reason=err} end
+    return {ok=true}
+end
+
+adminActions.delete_document = function(args)
+    local ok, err = db.deleteDocument(args.docId)
+    if not ok then return {ok=false, reason=err} end
+    return {ok=true}
+end
+
 adminActions.browse_archive = function(args)
     local tree, err = db.listArchiveChildren(args.folderId or "root", 0)
     if not tree then return {ok=false, reason=err} end
