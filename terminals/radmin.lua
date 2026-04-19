@@ -275,6 +275,19 @@ menu.suspend = function()
     showResult(sendAdmin("set_status", {name=name, status=status}), "UPDATED")
 end
 
+menu.setPin = function()
+    section("SET TABLET PIN")
+    local name = ui.prompt("Player name: ")
+    term.setCursorPos(2, 6)
+    term.setTextColor(ui.DIM); print("PIN is used to login to pocket tablets.")
+    term.setCursorPos(2, 7)
+    local pin = ui.promptHidden("New PIN: ")
+    if not pin or pin == "" then
+        ui.bigStatus(term.current(), {"CANCELLED"}, "idle"); sleep(1); return
+    end
+    showResult(sendAdmin("set_pin", {name=name, pin=pin}), "PIN SET: "..name)
+end
+
 menu.listPersonnel = function()
     ui.bigStatus(term.current(), {"LOADING..."}, "working")
     local r = sendAdmin("list_personnel", {})
@@ -649,6 +662,7 @@ local options = {
     {"Add document",        menu.addDocument},
     {"Delete archive item", menu.deleteArchiveItem},
     {"Set passcode",        menu.setPasscode},
+    {"Set tablet PIN",      menu.setPin},
     {"View security log",   menu.viewLog},
     {"Log out",             function() menu.logout(); login() end},
 }

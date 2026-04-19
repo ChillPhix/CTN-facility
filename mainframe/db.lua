@@ -209,6 +209,83 @@ function M.setFlag(name, flag, value)
     return false
 end
 
+function M.setPin(name, pin)
+    if data.personnel[name] then
+        data.personnel[name].pin = pin
+        M.save(); return true
+    end
+    return false
+end
+
+function M.authByPin(name, pin)
+    local p = data.personnel[name]
+    if not p then return nil, "unknown_person" end
+    if p.status ~= "active" then return nil, "personnel_"..p.status end
+    if not p.pin or p.pin == "" then return nil, "no_pin_set" end
+    if p.pin ~= pin then return nil, "bad_pin" end
+    return p
+end
+
+function M.getPerson(name)
+    return data.personnel[name]
+end
+
+function M.listPersonnel()
+    local out = {}
+    for name, p in pairs(data.personnel) do
+        out[#out+1] = {name=p.name, clearance=p.clearance, department=p.department,
+                       status=p.status, flags=p.flags}
+    end
+    table.sort(out, function(a,b) return a.clearance < b.clearance or
+        (a.clearance == b.clearance and a.name < b.name) end)
+    return out
+end
+
+-- ============================================================
+-- Radio message log (facility-wide broadcast history)
+-- ============================================================
+function M.addRadioMessage(from, message, channel)
+    data.radioLog = data.radioLog or {}
+    data.radioLog[#data.radioLog+1] = {
+        ts = os.epoch("utc"),
+        from = from,
+        msg = message,
+        channel = channel or "ALL",
+    }
+    -- Keep last 100
+    while #data.radioLog > 100 do table.remove(data.radioLog, 1) end
+    M.save()
+end
+
+function M.getRadioHistory(n)
+    data.radioLog = data.radioLog or {}
+    n = n or 30
+    local out = {}
+    local start = math.max(1, #data.radioLog - n + 1)
+    for i = start, #data.radioLog do
+        out[#out+1] = data.radioLog[i]
+    end
+    return out
+end
+
+-- ============================================================
+-- Door listing for remote control
+-- ============================================================
+function M.listDoors()
+    local out = {}
+    for name, d in pairs(data.doors) do
+        out[#out+1] = {
+            id = name,
+            name = d.name or name,
+            zone = d.zone,
+            computerId = d.computerId,
+            minClearance = d.minClearance,
+        }
+    end
+    table.sort(out, function(a,b) return (a.zone or "") < (b.zone or "") end)
+    return out
+end
+
 -- ============================================================
 -- Disks (keycards)
 -- ============================================================

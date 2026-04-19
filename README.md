@@ -17,8 +17,7 @@ Features
 - Zone + facility-wide lockdowns
 - Alarm/siren nodes with redstone pulse output
 - Player detection via Advanced Peripherals
-- Hierarchical document archive with clearance-gated folders and records
-- Archive terminals support mouse input, monitor/DirectGPU display, and printing
+- Document archive with clearance-gated folders
 - Central mainframe with live status monitor
 - Multiple remote admin terminals (no more single point of admin)
 - Control room with dashboard + breach/lockdown controls
@@ -41,11 +40,16 @@ Roles / terminal types
               for breach, lockdown, panic, security, etc. Optional
               redstone out for in-world lights.
 - detector  : player detector reporting zone occupancy
-- archive   : hierarchical document archive browser. Optional monitor/
-              DirectGPU display and printer output.
+- archive   : document archive browser
 - action    : facility-wide emergency response terminal. Card-authenticated.
               Clearance determines available actions. Clickable UI.
               Optional panic button via redstone input.
+- pocket    : THE tablet. Portable command center on a pocket computer.
+              PIN-authenticated on every boot. Features: facility status,
+              radio (send/receive broadcasts), remote door control, zone
+              lockdown/unlock, breach declaration, entity management,
+              personnel lookup, audit log, panic broadcast.
+              Clearance-gated: what you see depends on who you are.
 
 
 GETTING IT INTO MINECRAFT
@@ -121,8 +125,7 @@ chamber:   wireless modem. Optional: advanced monitor, disk drive
            (procedure viewing), redstone output (emergency light).
 alarm:     wireless modem + redstone output (wired to sirens/lights).
 detector:  wireless modem + Advanced Peripherals Player Detector.
-archive:   wireless modem + disk drive. Optional: advanced monitor or
-           DirectGPU display, printer.
+archive:   wireless modem + disk drive.
 
 
 CLEARANCE LEVELS
@@ -181,35 +184,6 @@ Defense layers:
 - Personnel can be suspended without revoking cards
 
 
-ARCHIVE SYSTEM
-==============
-The archive is a browsable folder tree rooted at:
-
-    Departments
-
-Admins can create folders and text documents anywhere in the tree from
-the local admin console or any remote admin terminal. Each folder and
-document has a required clearance level. Folder restrictions inherit
-downward: if a user cannot open a parent folder, they cannot open any
-documents or subfolders inside it.
-
-Archive users insert an ID card at an archive terminal. They can use
-arrow keys, mouse clicks, monitor touch, and mouse wheel scrolling. They
-can see folder names in the current folder, including restricted folders,
-but locked folders and documents cannot be opened without the required
-clearance. L0-L3 cards can create folders/documents in folders they can
-open. L0-L2 cards can delete documents and empty folders.
-
-Archive terminals can import text from files on the inserted ID floppy:
-place a .txt, .md, or .log file on the card, navigate to the destination
-folder, then choose IMPORT. ComputerCraft printers can print but cannot
-scan physical paper back into text; use disk import or paste/type the
-body when creating a document.
-
-If a printer is attached, an open document can be printed with P or the
-PRINT button.
-
-
 TROUBLESHOOTING
 ===============
 
@@ -262,7 +236,7 @@ terminals/control.lua   - Control room dashboard
 terminals/chamber.lua   - Containment chamber terminal
 terminals/alarm.lua     - Siren/alarm node
 terminals/detector.lua  - Player detector
-terminals/archive.lua   - Hierarchical document archive browser
+terminals/archive.lua   - Document archive browser
 
 install.lua             - GitHub-based installer
 

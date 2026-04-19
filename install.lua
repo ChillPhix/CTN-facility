@@ -63,6 +63,7 @@ local ROLES = {
     archive   = role({{src="terminals/archive.lua",  dest="/startup.lua"}}),
     action    = role({{src="terminals/action.lua",   dest="/startup.lua"}}),
     widget    = role({{src="terminals/widget.lua",   dest="/startup.lua"}}),
+    pocket    = role({{src="terminals/pocket.lua",   dest="/startup.lua"}}),
 }
 
 -- ============================================================
@@ -201,6 +202,15 @@ elseif role == "widget" then
     print("Optional: DirectGPU block for fancier rendering.")
     print("The wizard asks which info panel to display (breach status,")
     print("zones, clock, log, personnel, entities, or state).")
+elseif role == "pocket" then
+    print("Install on a pocket computer (Advanced Pocket Computer).")
+    print("Built-in wireless modem is used automatically.")
+    print("Each operator needs a PIN set via radmin -> 'Set tablet PIN'")
+    print("before they can log in. PIN is required on every boot.")
+    print("")
+    print("Features: facility status, radio, remote door control,")
+    print("zone lockdown, breach declaration, entity management,")
+    print("personnel lookup, audit log, panic broadcast.")
 elseif role == "radmin" then
     print("You need the 'admin' passcode set on the mainframe first.")
 end

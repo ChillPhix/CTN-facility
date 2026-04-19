@@ -147,13 +147,30 @@ while true do
     elseif etype == "rednet_message" then
         local message, proto_name = evt[3], evt[4]
         if proto_name == proto.PROTOCOL and type(message) == "table"
-           and message.from == MAINFRAME and message.type == "facility_alert" then
-            local payload = message.payload or {}
-            facilityState = payload.state or facilityState
-            if myZone and payload.zones and payload.zones[myZone] then
-                zoneLock = payload.zones[myZone].lockdown or false
+           and message.from == MAINFRAME then
+            if message.type == "facility_alert" then
+                local payload = message.payload or {}
+                facilityState = payload.state or facilityState
+                if myZone and payload.zones and payload.zones[myZone] then
+                    zoneLock = payload.zones[myZone].lockdown or false
+                end
+                drawIdle()
+            elseif message.type == "remote_open" then
+                -- Remote open from tablet / control room
+                local payload = message.payload or {}
+                local duration = payload.duration or myCfg.open_duration or 3
+                local openedBy = payload.openedBy or "REMOTE"
+                drawState("granted", {
+                    "REMOTE ACCESS", "",
+                    "Opened by: "..openedBy,
+                    "", "REMOTE OVERRIDE",
+                })
+                setDoor(true)
+                sleep(duration)
+                setDoor(false)
+                sleep(1)
+                drawIdle()
             end
-            drawIdle()
         end
     end
 end

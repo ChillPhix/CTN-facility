@@ -277,9 +277,152 @@ function handlers.doc_request(from, payload)
 end
 
 -- ============================================================
--- Facility commands (control room)
--- Payload: {passcode, action, args?, issuedBy}
+-- Tablet authentication (PIN-based)
 -- ============================================================
+function handlers.tablet_auth(from, payload)
+    if not payload.operatorName or not payload.pin then
+        return {ok=false, reason="missing_credentials"}
+    end
+    local person, err = db.authByPin(payload.operatorName, payload.pin)
+    if not person then
+        db.logFrom("security", "tablet auth FAILED: "..tostring(payload.operatorName).." ("..tostring(err)..")", from, {})
+        return {ok=false, reason=err}
+    end
+    db.logFrom("access", "tablet login: "..person.name.." L"..person.clearance, from,
+        {actor=person.name, clearance=person.clearance})
+    return {ok=true, person={
+        name=person.name, clearance=person.clearance,
+        department=person.department, status=person.status,
+        flags=person.flags,
+    }}
+end
+
+-- ============================================================
+-- Tablet requests (various actions, PIN-validated)
+-- ============================================================
+function handlers.tablet_request(from, payload)
+    if not payload.operatorName or not payload.pin then
+        return {ok=false, reason="missing_credentials"}
+    end
+    local person, err = db.authByPin(payload.operatorName, payload.pin)
+    if not person then return {ok=false, reason=err} end
+
+    local action = payload.action
+
+    if action == "list_entities" then
+        local entities = {}
+        local d = db.get()
+        for id, e in pairs(d.entities) do
+            entities[#entities+1] = {
+                entityId=e.entityId or id, name=e.name, class=e.class,
+                zone=e.zone, status=e.status, threat=e.threat,
+            }
+        end
+        table.sort(entities, function(a,b) return a.entityId < b.entityId end)
+        return {ok=true, entities=entities}
+
+    elseif action == "list_doors" then
+        return {ok=true, doors=db.listDoors()}
+
+    elseif action == "radio_send" then
+        if not payload.message or payload.message == "" then
+            return {ok=false, reason="empty_message"}
+        end
+        local channel = payload.channel or "ALL"
+        -- Check channel permissions
+        if channel == "COMMAND" and person.clearance > 2 then
+            return {ok=false, reason="insufficient_clearance"}
+        end
+        if channel == "SECURITY" and person.clearance > 4 then
+            return {ok=false, reason="insufficient_clearance"}
+        end
+        db.addRadioMessage(person.name, payload.message, channel)
+        -- Broadcast to all listeners
+        proto.send(nil, "radio_broadcast", {
+            from = person.name,
+            message = payload.message,
+            channel = channel,
+            ts = os.epoch("utc"),
+        })
+        db.logFrom("radio", "radio ["..channel.."]: "..person.name..": "..payload.message:sub(1,60), from,
+            {actor=person.name, channel=channel})
+        return {ok=true}
+
+    elseif action == "radio_history" then
+        return {ok=true, messages=db.getRadioHistory(30)}
+
+    elseif action == "remote_door_open" then
+        if person.clearance > 3 then
+            return {ok=false, reason="insufficient_clearance"}
+        end
+        local doorId = payload.doorId
+        local computerId = payload.computerId
+        if not doorId then return {ok=false, reason="missing_door"} end
+
+        -- Find the door and check clearance
+        local d = db.get()
+        local door = d.doors[doorId]
+        if not door then return {ok=false, reason="door_not_found"} end
+        if person.clearance > (door.minClearance or 5) then
+            return {ok=false, reason="insufficient_clearance"}
+        end
+
+        -- Check zone lockdown
+        local zone = d.zones[door.zone]
+        if zone and zone.lockdown and person.clearance > 2 then
+            return {ok=false, reason="zone_lockdown"}
+        end
+
+        -- Send open command to the door terminal
+        proto.send(door.computerId, "remote_open", {
+            duration = door.openDuration or 3,
+            openedBy = person.name,
+        })
+        db.logFrom("access", "REMOTE DOOR OPEN: "..doorId.." by "..person.name.." (tablet)", from,
+            {actor=person.name, door=doorId, zone=door.zone})
+        return {ok=true, effect="Door opened: "..doorId}
+
+    elseif action == "personnel_lookup" then
+        if person.clearance > 4 then
+            return {ok=false, reason="insufficient_clearance"}
+        end
+        local target = db.getPerson(payload.name)
+        if not target then return {ok=false, reason="not_found"} end
+        -- Don't expose PINs
+        return {ok=true, person={
+            name=target.name, clearance=target.clearance,
+            department=target.department, status=target.status,
+            flags=target.flags,
+        }}
+
+    elseif action == "panic_broadcast" then
+        db.setFacilityState("warning")
+        -- Send alarm to all sirens
+        local allAlarms = db.allAlarms()
+        for _, cid in ipairs(allAlarms) do
+            proto.send(cid, "alarm_set", {pattern="panic"})
+        end
+        proto.send(nil, "radio_broadcast", {
+            from = "SYSTEM",
+            message = ">>> PANIC ALERT from "..person.name.." <<<",
+            channel = "EMERGENCY",
+            ts = os.epoch("utc"),
+        })
+        db.addRadioMessage("SYSTEM", ">>> PANIC ALERT from "..person.name.." <<<", "EMERGENCY")
+        db.logFrom("facility", ">>> TABLET PANIC <<< by "..person.name, from,
+            {actor=person.name})
+        -- Broadcast facility alert (inline since broadcastFacilityAlert isn't defined yet)
+        local d = db.get()
+        proto.send(nil, "facility_alert", {
+            state = d.facility.state,
+            zones = d.zones,
+            breaches = db.activeBreaches(),
+        })
+        return {ok=true}
+    end
+
+    return {ok=false, reason="unknown_action"}
+end
 local function broadcastFacilityAlert()
     local d = db.get()
     proto.send(nil, "facility_alert", {
@@ -633,6 +776,12 @@ end
 
 adminActions.set_status = function(args)
     if db.setStatus(args.name, args.status) then return {ok=true} end
+    return {ok=false, reason="not_found"}
+end
+
+adminActions.set_pin = function(args)
+    if not args.name or not args.pin then return {ok=false, reason="missing_args"} end
+    if db.setPin(args.name, args.pin) then return {ok=true} end
     return {ok=false, reason="not_found"}
 end
 
