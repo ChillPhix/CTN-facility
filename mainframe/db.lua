@@ -669,6 +669,118 @@ function M.setPasscode(name, code)
 end
 
 -- ============================================================
+-- Mail system
+-- ============================================================
+local function ensureMail()
+    data.mail = data.mail or {}
+end
+
+local mailIdCounter = 0
+
+function M.sendMail(from, to, subject, body)
+    ensureMail()
+    if not data.personnel[to] then return nil, "recipient_not_found" end
+    mailIdCounter = mailIdCounter + 1
+    local id = "MSG-"..os.epoch("utc").."-"..mailIdCounter
+    data.mail[#data.mail+1] = {
+        id = id,
+        from = from,
+        to = to,
+        subject = subject or "(no subject)",
+        body = body or "",
+        ts = os.epoch("utc"),
+        read = false,
+        replied = false,
+    }
+    -- Cap at 500 messages total
+    while #data.mail > 500 do table.remove(data.mail, 1) end
+    M.save()
+    return id
+end
+
+function M.getInbox(personName, limit)
+    ensureMail()
+    limit = limit or 50
+    local out = {}
+    -- Reverse order: newest first
+    for i = #data.mail, 1, -1 do
+        local m = data.mail[i]
+        if m.to == personName then
+            out[#out+1] = {
+                id = m.id, from = m.from, subject = m.subject,
+                ts = m.ts, read = m.read, replied = m.replied,
+            }
+            if #out >= limit then break end
+        end
+    end
+    return out
+end
+
+function M.getSent(personName, limit)
+    ensureMail()
+    limit = limit or 50
+    local out = {}
+    for i = #data.mail, 1, -1 do
+        local m = data.mail[i]
+        if m.from == personName then
+            out[#out+1] = {
+                id = m.id, to = m.to, subject = m.subject,
+                ts = m.ts,
+            }
+            if #out >= limit then break end
+        end
+    end
+    return out
+end
+
+function M.readMail(msgId, personName)
+    ensureMail()
+    for _, m in ipairs(data.mail) do
+        if m.id == msgId then
+            -- Only recipient or sender can read
+            if m.to ~= personName and m.from ~= personName then
+                return nil, "access_denied"
+            end
+            if m.to == personName then m.read = true; M.save() end
+            return m
+        end
+    end
+    return nil, "not_found"
+end
+
+function M.deleteMail(msgId, personName)
+    ensureMail()
+    for i, m in ipairs(data.mail) do
+        if m.id == msgId then
+            if m.to ~= personName and m.from ~= personName then
+                return false, "access_denied"
+            end
+            table.remove(data.mail, i)
+            M.save()
+            return true
+        end
+    end
+    return false, "not_found"
+end
+
+function M.getUnreadCount(personName)
+    ensureMail()
+    local count = 0
+    for _, m in ipairs(data.mail) do
+        if m.to == personName and not m.read then count = count + 1 end
+    end
+    return count
+end
+
+function M.markReplied(msgId)
+    ensureMail()
+    for _, m in ipairs(data.mail) do
+        if m.id == msgId then m.replied = true; M.save(); return true end
+    end
+    return false
+end
+
+-- ============================================================
 -- Logs (append-only, with rotation)
 -- ============================================================
 function M.log(category, message, meta)

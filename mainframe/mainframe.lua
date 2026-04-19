@@ -569,6 +569,47 @@ function handlers.tablet_request(from, payload)
         db.setFacilityState(state)
         db.logFrom("facility", "facility state (tablet): "..state.." by "..person.name, from, {})
         return {ok=true}
+
+    -- ==================== MAIL ====================
+    elseif action == "mail_send" then
+        local to = payload.to
+        local subject = payload.subject
+        local body = payload.body
+        if not to or not subject then return {ok=false, reason="missing_fields"} end
+        local id, err = db.sendMail(person.name, to, subject, body or "")
+        if not id then return {ok=false, reason=err} end
+        db.logFrom("mail", "mail sent: "..person.name.." -> "..to..": "..subject:sub(1,30), from, {})
+        return {ok=true, messageId=id}
+
+    elseif action == "mail_inbox" then
+        return {ok=true, messages=db.getInbox(person.name, payload.limit),
+                unread=db.getUnreadCount(person.name)}
+
+    elseif action == "mail_sent" then
+        return {ok=true, messages=db.getSent(person.name, payload.limit)}
+
+    elseif action == "mail_read" then
+        if not payload.msgId then return {ok=false, reason="missing_id"} end
+        local msg, err = db.readMail(payload.msgId, person.name)
+        if not msg then return {ok=false, reason=err} end
+        return {ok=true, message=msg}
+
+    elseif action == "mail_delete" then
+        if not payload.msgId then return {ok=false, reason="missing_id"} end
+        local ok, err = db.deleteMail(payload.msgId, person.name)
+        if not ok then return {ok=false, reason=err} end
+        return {ok=true}
+
+    elseif action == "mail_reply" then
+        if not payload.msgId or not payload.body then return {ok=false, reason="missing_fields"} end
+        local orig, err = db.readMail(payload.msgId, person.name)
+        if not orig then return {ok=false, reason=err} end
+        local subject = "RE: "..(orig.subject or "")
+        local id, err2 = db.sendMail(person.name, orig.from, subject, payload.body)
+        if not id then return {ok=false, reason=err2} end
+        db.markReplied(payload.msgId)
+        db.logFrom("mail", "mail reply: "..person.name.." -> "..orig.from, from, {})
+        return {ok=true, messageId=id}
     end
 
     return {ok=false, reason="unknown_action"}

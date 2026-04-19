@@ -645,6 +645,186 @@ local function panicBroadcast()
 end
 
 -- ============================================================
+-- Feature: Mail
+-- ============================================================
+local function mailCompose(replyTo)
+    ui.clear(term.current())
+    smallHeader(replyTo and "REPLY" or "COMPOSE")
+    local w = term.getSize()
+
+    local to
+    if replyTo then
+        to = replyTo.from
+        term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
+        term.write("To: "..to)
+    else
+        term.setCursorPos(2, 4); term.setTextColor(ui.FG)
+        term.write("To: "); term.setTextColor(ui.ACCENT)
+        to = read()
+        if not to or to == "" then return end
+    end
+
+    local subject
+    if replyTo then
+        subject = "RE: "..(replyTo.subject or "")
+        term.setCursorPos(2, 5); term.setTextColor(ui.DIM)
+        term.write("Subj: "..subject:sub(1, w - 8))
+    else
+        term.setCursorPos(2, 5); term.setTextColor(ui.FG)
+        term.write("Subj: "); term.setTextColor(ui.ACCENT)
+        subject = read()
+        if not subject or subject == "" then return end
+    end
+
+    local bodyY = replyTo and 7 or 7
+    term.setCursorPos(2, bodyY - 1); term.setTextColor(ui.DIM)
+    term.write("Message (end with '.' alone):")
+    term.setTextColor(ui.FG)
+    local lines = {}
+    local y = bodyY
+    while true do
+        term.setCursorPos(2, y)
+        local line = read()
+        if line == "." then break end
+        lines[#lines+1] = line
+        y = y + 1
+        if y >= select(2, term.getSize()) - 1 then
+            -- scroll by just continuing
+            y = y - 1
+        end
+    end
+    local body = table.concat(lines, "\n")
+
+    ui.bigStatus(term.current(), {"SENDING..."}, "working")
+    local reply
+    if replyTo then
+        reply = tabletRequest("mail_reply", {msgId=replyTo.id, body=body})
+    else
+        reply = tabletRequest("mail_send", {to=to, subject=subject, body=body})
+    end
+    showResult(reply, "MESSAGE SENT")
+end
+
+local function mailReadMsg(msg)
+    -- Fetch full message
+    local reply = tabletRequest("mail_read", {msgId=msg.id})
+    if not reply or not reply.ok then
+        ui.bigStatus(term.current(), {"FAILED"}, "error"); sleep(1.5); return
+    end
+    local m = reply.message
+    local w, h = term.getSize()
+    local bodyLines = {}
+    local rawBody = (m.body or "").."\n"
+    for raw in rawBody:gmatch("(.-)\n") do
+        if raw == "" then bodyLines[#bodyLines+1] = ""
+        else
+            local line = ""
+            for word in raw:gmatch("%S+") do
+                if #line + #word + 1 > w - 4 then
+                    bodyLines[#bodyLines+1] = line; line = word
+                else
+                    line = line == "" and word or (line.." "..word)
+                end
+            end
+            if line ~= "" then bodyLines[#bodyLines+1] = line end
+        end
+    end
+
+    local scroll = 0
+    while true do
+        ui.clear(term.current())
+        smallHeader("MAIL")
+        term.setCursorPos(2, 3); term.setTextColor(ui.DIM)
+        term.write("From: "); term.setTextColor(ui.ACCENT); term.write((m.from or "?"):sub(1, w-8))
+        term.setCursorPos(2, 4); term.setTextColor(ui.DIM)
+        term.write("Subj: "); term.setTextColor(ui.FG); term.write((m.subject or ""):sub(1, w-8))
+        term.setCursorPos(2, 5); term.setTextColor(ui.BORDER)
+        term.write(string.rep("-", w - 2))
+
+        local visible = h - 8
+        for i = 1, visible do
+            local line = bodyLines[scroll + i]
+            if not line then break end
+            term.setCursorPos(2, 5 + i); term.setTextColor(ui.FG)
+            term.write(line:sub(1, w - 2))
+        end
+
+        smallFooter("R=reply D=del Q=back")
+
+        local evt = {os.pullEvent()}
+        if evt[1] == "key" then
+            local key = evt[2]
+            if key == keys.q or key == keys.backspace then return
+            elseif key == keys.r then
+                mailCompose(m); return
+            elseif key == keys.d then
+                tabletRequest("mail_delete", {msgId=m.id})
+                ui.bigStatus(term.current(), {"DELETED"}, "granted"); sleep(1); return
+            elseif key == keys.up then
+                scroll = math.max(0, scroll - 1)
+            elseif key == keys.down then
+                scroll = math.min(math.max(0, #bodyLines - visible), scroll + 1)
+            end
+        elseif evt[1] == "mouse_scroll" then
+            scroll = math.max(0, math.min(math.max(0, #bodyLines - visible), scroll + evt[2]))
+        end
+    end
+end
+
+local function mailView()
+    while true do
+        ui.bigStatus(term.current(), {"LOADING MAIL..."}, "working")
+        local reply = tabletRequest("mail_inbox")
+        if not reply or not reply.ok then
+            ui.bigStatus(term.current(), {"FAILED"}, "error"); sleep(1.5); return
+        end
+
+        local unread = reply.unread or 0
+        local messages = reply.messages or {}
+
+        -- Build menu: Compose + Sent + inbox messages
+        local items = {}
+        items[#items+1] = {label=">> COMPOSE NEW <<", action="compose"}
+        items[#items+1] = {label=">> SENT MESSAGES <<", action="sent"}
+        for _, m in ipairs(messages) do
+            local prefix = m.read and "  " or "* "
+            local ts = os.date("%m/%d %H:%M", (m.ts or 0) / 1000)
+            items[#items+1] = {
+                label = prefix..ts.." "..m.from..": "..m.subject,
+                action = "read", msg = m,
+                color = m.read and ui.DIM or ui.FG,
+            }
+        end
+
+        local title = "MAIL"
+        if unread > 0 then title = "MAIL ("..unread.." new)" end
+
+        local idx, item = scrollList(title, items, "ENTER=open  Q=back")
+        if not idx then return end
+
+        if item.action == "compose" then
+            mailCompose()
+        elseif item.action == "sent" then
+            -- Show sent
+            local sr = tabletRequest("mail_sent")
+            if sr and sr.ok then
+                local sentItems = {}
+                for _, m in ipairs(sr.messages or {}) do
+                    local ts = os.date("%m/%d %H:%M", (m.ts or 0) / 1000)
+                    sentItems[#sentItems+1] = {
+                        label = ts.." -> "..m.to..": "..m.subject,
+                        color = ui.DIM,
+                    }
+                end
+                scrollList("SENT", sentItems, "Q=back")
+            end
+        elseif item.action == "read" then
+            mailReadMsg(item.msg)
+        end
+    end
+end
+
+-- ============================================================
 -- Main menu
 -- ============================================================
 local function buildMenu()
@@ -653,6 +833,7 @@ local function buildMenu()
 
     -- Everyone gets these
     items[#items+1] = {label="View Status",      action="status",    minC=5}
+    items[#items+1] = {label="Mail",             action="mail",      minC=5}
     items[#items+1] = {label="Radio",            action="radio",     minC=5}
     items[#items+1] = {label="View Audit Log",   action="log",       minC=4}
 
@@ -688,6 +869,7 @@ end
 
 local ACTIONS = {
     status      = viewStatus,
+    mail        = mailView,
     radio       = radioView,
     log         = viewLog,
     personnel   = personnelLookup,
