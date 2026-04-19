@@ -44,19 +44,14 @@ local data = {
     personnel = {},
     disks     = {},
     doors     = {},
-    zones     = {
-        Office   = {lockdown=false, alarm="normal", occupants={}},
-        Security = {lockdown=false, alarm="normal", occupants={}},
-        Testing  = {lockdown=false, alarm="normal", occupants={}},
-        LCZ      = {lockdown=false, alarm="normal", occupants={}},
-        HCZ      = {lockdown=false, alarm="normal", occupants={}},
-    },
+    zones     = {},
     passcodes = { issuer = "0000", control = "0000", admin = "0000" },
     facility  = { state = "normal" },
     identity  = {
-        name     = "C.T.N",
-        subtitle = "CONTAINMENT DIVISION",
-        colorScheme = "yellow",  -- key into SCHEMES table
+        name     = "FACILITY",
+        subtitle = "SYSTEM",
+        fgColor  = "yellow",
+        bgColor  = "black",
     },
     documents = {},
     archiveFolders = {
@@ -434,11 +429,12 @@ function M.getIdentity()
     return data.identity
 end
 
-function M.setIdentity(name, subtitle, colorScheme)
+function M.setIdentity(name, subtitle, fgColor, bgColor)
     data.identity = data.identity or {}
-    data.identity.name = name or data.identity.name or "C.T.N"
-    data.identity.subtitle = subtitle or data.identity.subtitle or "CONTAINMENT DIVISION"
-    data.identity.colorScheme = colorScheme or data.identity.colorScheme or "yellow"
+    data.identity.name = name or data.identity.name or "FACILITY"
+    data.identity.subtitle = subtitle or data.identity.subtitle or "SYSTEM"
+    data.identity.fgColor = fgColor or data.identity.fgColor or "yellow"
+    data.identity.bgColor = bgColor or data.identity.bgColor or "black"
     M.save()
 end
 
@@ -448,6 +444,37 @@ function M.setZoneLockdown(zone, value)
         M.save(); return true
     end
     return false
+end
+
+function M.addZone(name)
+    if not name or name == "" then return false, "missing_name" end
+    if data.zones[name] then return false, "zone_exists" end
+    data.zones[name] = {lockdown=false, alarm="normal", occupants={}}
+    M.save()
+    return true
+end
+
+function M.removeZone(name)
+    if not name or not data.zones[name] then return false, "not_found" end
+    data.zones[name] = nil
+    M.save()
+    return true
+end
+
+function M.listZones()
+    local out = {}
+    for name, z in pairs(data.zones) do
+        out[#out+1] = {name=name, lockdown=z.lockdown, occupants=z.occupants or {}}
+    end
+    table.sort(out, function(a,b) return a.name < b.name end)
+    return out
+end
+
+function M.getZoneNames()
+    local out = {}
+    for name in pairs(data.zones) do out[#out+1] = name end
+    table.sort(out)
+    return out
 end
 
 -- ============================================================

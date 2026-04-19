@@ -6,63 +6,28 @@
 local M = {}
 
 -- ============================================================
--- Color schemes
+-- Color names available for fg and bg picks
 -- ============================================================
-M.SCHEMES = {
-    yellow = {
-        fg = colors.yellow, bg = colors.black, dim = colors.gray,
-        border = colors.yellow, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
-    red = {
-        fg = colors.red, bg = colors.black, dim = colors.gray,
-        border = colors.red, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
-    cyan = {
-        fg = colors.cyan, bg = colors.black, dim = colors.gray,
-        border = colors.cyan, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
-    green = {
-        fg = colors.green, bg = colors.black, dim = colors.gray,
-        border = colors.green, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
-    purple = {
-        fg = colors.purple, bg = colors.black, dim = colors.gray,
-        border = colors.purple, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
-    blue = {
-        fg = colors.blue, bg = colors.black, dim = colors.gray,
-        border = colors.blue, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
-    white = {
-        fg = colors.white, bg = colors.black, dim = colors.gray,
-        border = colors.white, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.lightBlue,
-    },
-    orange = {
-        fg = colors.orange, bg = colors.black, dim = colors.gray,
-        border = colors.orange, ok = colors.lime, warn = colors.yellow,
-        err = colors.red, accent = colors.white,
-    },
-    lime = {
-        fg = colors.lime, bg = colors.black, dim = colors.gray,
-        border = colors.lime, ok = colors.green, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
-    pink = {
-        fg = colors.pink, bg = colors.black, dim = colors.gray,
-        border = colors.pink, ok = colors.lime, warn = colors.orange,
-        err = colors.red, accent = colors.white,
-    },
+M.COLOR_NAMES = {
+    "white","orange","magenta","lightBlue","yellow","lime",
+    "pink","gray","lightGray","cyan","purple","blue",
+    "brown","green","red","black",
 }
 
+M.COLOR_MAP = {
+    white=colors.white, orange=colors.orange, magenta=colors.magenta,
+    lightBlue=colors.lightBlue, yellow=colors.yellow, lime=colors.lime,
+    pink=colors.pink, gray=colors.gray, lightGray=colors.lightGray,
+    cyan=colors.cyan, purple=colors.purple, blue=colors.blue,
+    brown=colors.brown, green=colors.green, red=colors.red, black=colors.black,
+}
+
+local function colorByName(name)
+    return M.COLOR_MAP[name] or colors.yellow
+end
+
 -- ============================================================
--- Theme (defaults to yellow, can be swapped at runtime)
+-- Theme (defaults to yellow on black, swapped at runtime)
 -- ============================================================
 M.BG      = colors.black
 M.FG      = colors.yellow
@@ -73,49 +38,57 @@ M.WARN    = colors.orange
 M.ERR     = colors.red
 M.ACCENT  = colors.white
 
--- Facility identity (set by applyIdentity)
-M.facilityName     = "C.T.N"
-M.facilitySubtitle = "CONTAINMENT DIVISION"
-M.colorSchemeName  = "yellow"
+-- Facility identity
+M.facilityName     = "FACILITY"
+M.facilitySubtitle = "SYSTEM"
+M.fgColorName      = "yellow"
+M.bgColorName      = "black"
 
---- Apply a color scheme by name.
-function M.applyScheme(schemeName)
-    local scheme = M.SCHEMES[schemeName] or M.SCHEMES.yellow
-    M.BG      = scheme.bg
-    M.FG      = scheme.fg
-    M.DIM     = scheme.dim
-    M.BORDER  = scheme.border
-    M.OK      = scheme.ok
-    M.WARN    = scheme.warn
-    M.ERR     = scheme.err
-    M.ACCENT  = scheme.accent
-    M.colorSchemeName = schemeName
+--- Apply two-color scheme.
+function M.applyColors(fgName, bgName)
+    fgName = fgName or "yellow"
+    bgName = bgName or "black"
+    M.fgColorName = fgName
+    M.bgColorName = bgName
+    M.FG     = colorByName(fgName)
+    M.BG     = colorByName(bgName)
+    M.BORDER = M.FG
+    -- Pick a dim color that's visible on the bg
+    if bgName == "black" or bgName == "gray" then
+        M.DIM = colors.gray
+    else
+        M.DIM = colors.lightGray
+    end
+    -- Accent should contrast with bg
+    if bgName == "white" or bgName == "lightGray" then
+        M.ACCENT = colors.black
+    else
+        M.ACCENT = colors.white
+    end
 end
 
---- Apply full facility identity (name + subtitle + colors).
--- Called by terminals after receiving identity from mainframe.
+--- Apply full facility identity.
 function M.applyIdentity(identity)
     if not identity then return end
     M.facilityName     = identity.name or M.facilityName
     M.facilitySubtitle = identity.subtitle or M.facilitySubtitle
-    if identity.colorScheme then
-        M.applyScheme(identity.colorScheme)
-    end
+    M.applyColors(identity.fgColor or identity.colorScheme or "yellow",
+                  identity.bgColor or "black")
 end
 
---- Save identity to a local cache file so it persists across reboots
---- even before the mainframe is contacted.
+--- Cache identity to disk.
 function M.cacheIdentity()
     local f = fs.open("/.ctn_identity", "w")
     f.write(textutils.serialize({
         name = M.facilityName,
         subtitle = M.facilitySubtitle,
-        colorScheme = M.colorSchemeName,
+        fgColor = M.fgColorName,
+        bgColor = M.bgColorName,
     }))
     f.close()
 end
 
---- Load cached identity from disk (if any).
+--- Load cached identity.
 function M.loadCachedIdentity()
     if not fs.exists("/.ctn_identity") then return false end
     local f = fs.open("/.ctn_identity", "r")
@@ -126,6 +99,27 @@ function M.loadCachedIdentity()
         return true
     end
     return false
+end
+
+--- Call on terminal boot.
+function M.bootIdentity()
+    return M.loadCachedIdentity()
+end
+
+--- Call when receiving ANY reply from mainframe. Checks for identity field.
+function M.syncIdentity(reply)
+    if not reply then return end
+    if type(reply) ~= "table" then return end
+    local ident = reply.identity
+    if not ident then return end
+    M.applyIdentity(ident)
+    M.cacheIdentity()
+    -- Sync GPU too
+    local ok2, gpu = pcall(require, "ctngpu")
+    if ok2 and gpu and gpu.applyColors then
+        gpu.applyColors(ident.fgColor or ident.colorScheme or "yellow",
+                        ident.bgColor or "black")
+    end
 end
 
 -- ============================================================

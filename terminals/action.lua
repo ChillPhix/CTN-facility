@@ -208,7 +208,20 @@ end
 -- ============================================================
 -- Action executors
 -- ============================================================
-local ZONES = {"Office","Security","Testing","LCZ","HCZ"}
+local cachedZones = {}
+
+local function getZones()
+    if #cachedZones > 0 then return cachedZones end
+    -- Try to pull from mainframe
+    local reply = proto.request(MAINFRAME, "status_request", {}, 2)
+    if reply and reply.ok and reply.zones then
+        ui.syncIdentity(reply)
+        for name in pairs(reply.zones) do cachedZones[#cachedZones+1] = name end
+        table.sort(cachedZones)
+    end
+    if #cachedZones == 0 then cachedZones = {"(no zones)"} end
+    return cachedZones
+end
 
 local function pickZoneWithButtons()
     ui.clear(term.current())
@@ -219,7 +232,7 @@ local function pickZoneWithButtons()
         "CANCEL", {fg=ui.DIM, hotkey="x"})
     table.insert(buttons, cancel)
     local idx = ui.clickMenu(buttons)
-    if idx and idx <= #ZONES then return ZONES[idx] end
+    if idx and idx <= #getZones() then return getZones()[idx] end
     return nil
 end
 
@@ -313,7 +326,7 @@ local function executeAction(actionDef)
             term.setTextColor(stateColor); term.write(reply.facility.state:upper())
             local y = 7
             term.setCursorPos(2, y); term.setTextColor(ui.FG); term.write("Zones:")
-            for _, zn in ipairs(ZONES) do
+            for _, zn in ipairs(getZones()) do
                 y = y + 1
                 local z = reply.zones[zn] or {}
                 term.setCursorPos(4, y); term.setTextColor(ui.ACCENT); term.write(string.format("%-10s ", zn))

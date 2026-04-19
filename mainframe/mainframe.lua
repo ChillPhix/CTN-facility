@@ -20,40 +20,83 @@ proto.openModem()
 -- First-boot identity setup: if no identity is configured, ask.
 local ident = db.getIdentity()
 if not ident.configured then
-    local cfg = require("ctnconfig")
+    local colorNames = ui.COLOR_NAMES
+
     ui.clear(term.current())
     ui.header(term.current(), "MAINFRAME FIRST-RUN")
     term.setCursorPos(2, 5); term.setTextColor(ui.WARN)
     print("Configure this facility's identity.")
+
     term.setCursorPos(2, 7); term.setTextColor(ui.FG)
     write("Facility name (e.g. C.T.N): "); term.setTextColor(ui.ACCENT)
     local name = read()
-    if name == "" then name = "C.T.N" end
-    term.setTextColor(ui.FG)
-    term.setCursorPos(2, 8)
+    if name == "" then name = "FACILITY" end
+
+    term.setTextColor(ui.FG); term.setCursorPos(2, 8)
     write("Subtitle (e.g. CONTAINMENT DIVISION): "); term.setTextColor(ui.ACCENT)
     local subtitle = read()
-    if subtitle == "" then subtitle = "CONTAINMENT DIVISION" end
-    term.setTextColor(ui.FG)
-    term.setCursorPos(2, 10); print("Color scheme:")
-    local schemeNames = {"yellow","red","cyan","green","purple","blue","white","orange","lime","pink"}
-    for i, s in ipairs(schemeNames) do
-        term.setCursorPos(4, 10 + i); term.setTextColor(ui.DIM)
-        write("["..i.."] "); term.setTextColor(ui.FG); write(s)
-    end
-    term.setCursorPos(2, 11 + #schemeNames); term.setTextColor(ui.FG)
-    write("> "); term.setTextColor(ui.ACCENT)
-    local sn = tonumber(read()) or 1
-    local scheme = schemeNames[sn] or "yellow"
+    if subtitle == "" then subtitle = "SYSTEM" end
 
-    db.setIdentity(name, subtitle, scheme)
-    -- Mark as configured so we don't ask again
+    -- Foreground color
+    term.setTextColor(ui.FG); term.setCursorPos(2, 10)
+    print("Primary color (text/borders):")
+    for i, c in ipairs(colorNames) do
+        term.setCursorPos(4, 10 + i); term.setTextColor(ui.DIM)
+        write("["..i.."] "); term.setTextColor(ui.COLOR_MAP[c] or ui.FG); write(c)
+    end
+    term.setCursorPos(2, 11 + #colorNames); term.setTextColor(ui.FG)
+    write("> "); term.setTextColor(ui.ACCENT)
+    local fgN = tonumber(read()) or 5  -- default yellow
+    local fgColor = colorNames[fgN] or "yellow"
+
+    -- Background color
+    ui.clear(term.current())
+    ui.header(term.current(), "MAINFRAME FIRST-RUN")
+    term.setCursorPos(2, 5); term.setTextColor(ui.FG)
+    print("Background color:")
+    for i, c in ipairs(colorNames) do
+        term.setCursorPos(4, 5 + i); term.setTextColor(ui.DIM)
+        write("["..i.."] "); term.setTextColor(ui.COLOR_MAP[c] or ui.FG); write(c)
+    end
+    term.setCursorPos(2, 6 + #colorNames); term.setTextColor(ui.FG)
+    write("> "); term.setTextColor(ui.ACCENT)
+    local bgN = tonumber(read()) or 16  -- default black
+    local bgColor = colorNames[bgN] or "black"
+
+    db.setIdentity(name, subtitle, fgColor, bgColor)
     local d = db.get()
     d.identity.configured = true
     db.save()
 
     ui.applyIdentity(db.getIdentity())
-    ui.bigStatus(term.current(), {"IDENTITY SET", "", name, subtitle, scheme:upper()}, "granted")
+
+    -- Zone setup
+    ui.clear(term.current())
+    ui.header(term.current(), "ZONE SETUP")
+    term.setCursorPos(2, 5); term.setTextColor(ui.FG)
+    print("Add zones for your facility.")
+    print("Type zone names one per line.")
+    print("Empty line when done.")
+    local y = 8
+    while true do
+        term.setCursorPos(2, y); term.setTextColor(ui.FG)
+        write("Zone: "); term.setTextColor(ui.ACCENT)
+        local zname = read()
+        if not zname or zname == "" then break end
+        db.addZone(zname)
+        term.setCursorPos(2, y); term.setTextColor(ui.OK)
+        term.write("Added: "..zname)
+        y = y + 1
+        if y >= select(2, term.getSize()) - 2 then
+            term.setCursorPos(2, y); term.setTextColor(ui.DIM)
+            print("[Enter to continue]"); read()
+            ui.clear(term.current())
+            ui.header(term.current(), "ZONE SETUP")
+            y = 5
+        end
+    end
+
+    ui.bigStatus(term.current(), {"SETUP COMPLETE", "", name, subtitle, fgColor.." on "..bgColor}, "granted")
     sleep(2)
 else
     ui.applyIdentity(ident)
@@ -440,7 +483,6 @@ function handlers.tablet_request(from, payload)
 
     elseif action == "panic_broadcast" then
         db.setFacilityState("warning")
-        -- Send alarm to all sirens
         local allAlarms = db.allAlarms()
         for _, cid in ipairs(allAlarms) do
             proto.send(cid, "alarm_set", {pattern="panic"})
@@ -454,13 +496,70 @@ function handlers.tablet_request(from, payload)
         db.addRadioMessage("SYSTEM", ">>> PANIC ALERT from "..person.name.." <<<", "EMERGENCY")
         db.logFrom("facility", ">>> TABLET PANIC <<< by "..person.name, from,
             {actor=person.name})
-        -- Broadcast facility alert (inline since broadcastFacilityAlert isn't defined yet)
         local d = db.get()
         proto.send(nil, "facility_alert", {
             state = d.facility.state,
             zones = d.zones,
             breaches = db.activeBreaches(),
         })
+        return {ok=true}
+
+    -- Facility actions routed through tablet (PIN-authenticated, clearance-checked)
+    elseif action == "zone_lockdown" then
+        if person.clearance > 2 then return {ok=false, reason="insufficient_clearance"} end
+        local zone = payload.zone or (payload.args and payload.args.zone)
+        if not zone then return {ok=false, reason="missing_zone"} end
+        db.setZoneLockdown(zone, true)
+        db.logFrom("facility", "zone lockdown ON (tablet): "..zone.." by "..person.name, from, {zone=zone})
+        return {ok=true, effect="LOCKDOWN: "..zone}
+
+    elseif action == "zone_unlock" then
+        if person.clearance > 2 then return {ok=false, reason="insufficient_clearance"} end
+        local zone = payload.zone or (payload.args and payload.args.zone)
+        if not zone then return {ok=false, reason="missing_zone"} end
+        db.setZoneLockdown(zone, false)
+        db.logFrom("facility", "zone unlock (tablet): "..zone.." by "..person.name, from, {zone=zone})
+        return {ok=true, effect="UNLOCKED: "..zone}
+
+    elseif action == "declare_breach" then
+        if person.clearance > 2 then return {ok=false, reason="insufficient_clearance"} end
+        local scpId = payload.scpId or (payload.args and payload.args.scpId)
+        local zone = payload.zone or (payload.args and payload.args.zone)
+        if not scpId then return {ok=false, reason="missing_entity"} end
+        local ent = db.getEntity and db.getEntity(scpId)
+        zone = zone or (ent and ent.zone) or "unknown"
+        db.declareBreach(scpId, zone, person.name)
+        db.setFacilityState("breach")
+        db.setZoneLockdown(zone, true)
+        db.setEntityStatus(scpId, "breached")
+        db.logFrom("facility", ">>> BREACH (tablet) <<< "..scpId.." by "..person.name, from, {entity=scpId})
+        return {ok=true, effect="BREACH: "..scpId}
+
+    elseif action == "end_breach" then
+        if person.clearance > 2 then return {ok=false, reason="insufficient_clearance"} end
+        local scpId = payload.scpId or (payload.args and payload.args.scpId)
+        if not scpId then return {ok=false, reason="missing_entity"} end
+        db.endBreach(scpId)
+        db.setEntityStatus(scpId, "contained")
+        if #db.activeBreaches() == 0 then db.setFacilityState("normal") end
+        db.logFrom("facility", "breach contained (tablet): "..scpId.." by "..person.name, from, {entity=scpId})
+        return {ok=true, effect="CONTAINED: "..scpId}
+
+    elseif action == "set_entity_status" then
+        if person.clearance > 2 then return {ok=false, reason="insufficient_clearance"} end
+        local entityId = payload.entityId or (payload.args and payload.args.entityId)
+        local newStatus = payload.status or (payload.args and payload.args.status)
+        if not entityId or not newStatus then return {ok=false, reason="missing_args"} end
+        db.setEntityStatus(entityId, newStatus)
+        db.logFrom("facility", "entity status (tablet): "..entityId.." -> "..newStatus.." by "..person.name, from, {})
+        return {ok=true}
+
+    elseif action == "set_state" then
+        if person.clearance > 1 then return {ok=false, reason="insufficient_clearance"} end
+        local state = payload.state or (payload.args and payload.args.state)
+        if not state then return {ok=false, reason="missing_state"} end
+        db.setFacilityState(state)
+        db.logFrom("facility", "facility state (tablet): "..state.." by "..person.name, from, {})
         return {ok=true}
     end
 
@@ -830,14 +929,34 @@ adminActions.set_pin = function(args)
 end
 
 adminActions.set_identity = function(args)
-    db.setIdentity(args.name, args.subtitle, args.colorScheme)
+    db.setIdentity(args.name, args.subtitle, args.fgColor, args.bgColor)
     local d = db.get()
     d.identity.configured = true
     db.save()
     db.log("admin", "facility identity changed: "..(args.name or "?"), {
-        name=args.name, subtitle=args.subtitle, colorScheme=args.colorScheme,
+        name=args.name, subtitle=args.subtitle, fgColor=args.fgColor, bgColor=args.bgColor,
     })
     return {ok=true}
+end
+
+adminActions.add_zone = function(args)
+    if not args.name then return {ok=false, reason="missing_name"} end
+    local ok, err = db.addZone(args.name)
+    if not ok then return {ok=false, reason=err} end
+    db.log("admin", "zone added: "..args.name, {zone=args.name})
+    return {ok=true}
+end
+
+adminActions.remove_zone = function(args)
+    if not args.name then return {ok=false, reason="missing_name"} end
+    local ok, err = db.removeZone(args.name)
+    if not ok then return {ok=false, reason=err} end
+    db.log("admin", "zone removed: "..args.name, {zone=args.name})
+    return {ok=true}
+end
+
+adminActions.list_zones = function()
+    return db.listZones()
 end
 
 adminActions.add_door = function(args)

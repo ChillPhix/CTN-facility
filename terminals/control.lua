@@ -25,7 +25,13 @@ local myCfg = cfg.loadOrWizard("control", {
 proto.openModem()
 ui.bootIdentity()
 
-local ZONES = {"Office","Security","Testing","LCZ","HCZ"}
+local function getZones()
+    local z = {}
+    for name in pairs(status.zones or {}) do z[#z+1] = name end
+    table.sort(z)
+    if #z == 0 then z = {"(no zones)"} end
+    return z
+end
 
 -- Session state
 local session = {loggedIn=false, username=nil, passcode=nil}
@@ -133,7 +139,7 @@ local function drawDashGpu(be)
     local p1y = topY
     local p1 = gpu.panel(be, p1x, p1y, colW, rowH, "ZONE STATUS", "normal")
     local zy = p1.contentY + 2
-    for _, zn in ipairs(ZONES) do
+    for _, zn in ipairs(getZones()) do
         if zy > p1.y + p1.h - 14 then break end
         local z = status.zones[zn] or {}
         local locked = z.lockdown
@@ -247,7 +253,7 @@ local function drawDashGpu(be)
     local p6 = gpu.panel(be, p6x, p4y, colW, rowH, "PERSONNEL / ZONES", "normal")
     local py = p6.contentY + 2
     local totalOcc = 0
-    for _, zn in ipairs(ZONES) do
+    for _, zn in ipairs(getZones()) do
         if py > p6.y + p6.h - 14 then break end
         local z = status.zones[zn] or {}
         local occ = z.occupants and #z.occupants or 0
@@ -335,7 +341,7 @@ local function drawDashMon(be)
     -- Zones
     local p1 = gpu.panel(be, 1, topY, col1W, halfH, "ZONES", "normal")
     local zy = p1.contentY
-    for _, zn in ipairs(ZONES) do
+    for _, zn in ipairs(getZones()) do
         if zy > p1.y + p1.h - 2 then break end
         local z = status.zones[zn] or {}
         local col = z.lockdown and gpu.COLORS.err or gpu.COLORS.ok
@@ -571,7 +577,7 @@ actions.viewStatus = function()
     term.setTextColor(col); term.write(st:upper()); y = y + 2
 
     term.setCursorPos(2, y); term.setTextColor(ui.ACCENT); term.write("ZONES:"); y = y + 1
-    for _, zn in ipairs(ZONES) do
+    for _, zn in ipairs(getZones()) do
         local z = status.zones[zn] or {}
         term.setCursorPos(4, y); term.setTextColor(ui.FG); term.write(string.format("%-10s ", zn))
         if z.lockdown then term.setTextColor(ui.ERR); term.write("LOCKED ")

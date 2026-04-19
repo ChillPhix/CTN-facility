@@ -16,7 +16,18 @@ ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 
 local DEPARTMENTS = {"Security","Research","MTF","Medical","Admin","Janitor","Guest","Ethics","Director"}
-local ZONES = {"Office","Security","Testing","LCZ","HCZ"}
+local function getZones()
+    local r = sendAdmin("list_zones", {})
+    local zones = {}
+    if type(r) == "table" then
+        for _, z in ipairs(r) do
+            if type(z) == "table" and z.name then zones[#zones+1] = z.name end
+        end
+    end
+    table.sort(zones)
+    if #zones == 0 then zones = {"(no zones)"} end
+    return zones
+end
 local CLASSES = {"Safe","Euclid","Keter","Thaumiel","Apollyon","Neutralized"}
 local ENTITY_STATUSES = {"contained","breached","testing","maintenance","decommissioned","deceased"}
 
@@ -299,14 +310,15 @@ menu.setIdentity = function()
     term.setCursorPos(2, 6)
     local subtitle = ui.prompt("Subtitle (e.g. RESEARCH DIVISION): ")
     if subtitle == "" then subtitle = "FACILITY SYSTEM" end
-    local schemeNames = {"yellow","red","cyan","green","purple","blue","white","orange","lime","pink"}
-    local sn = pickFromList("COLOR SCHEME", schemeNames)
-    if not sn then return end
+    local colorNames = ui.COLOR_NAMES
+    local fgPick = pickFromList("PRIMARY COLOR (text/borders)", colorNames)
+    if not fgPick then return end
+    local bgPick = pickFromList("BACKGROUND COLOR", colorNames)
+    if not bgPick then return end
     showResult(sendAdmin("set_identity", {
-        name=name, subtitle=subtitle, colorScheme=sn,
+        name=name, subtitle=subtitle, fgColor=fgPick, bgColor=bgPick,
     }), "IDENTITY UPDATED")
-    -- Apply locally too
-    ui.applyIdentity({name=name, subtitle=subtitle, colorScheme=sn})
+    ui.applyIdentity({name=name, subtitle=subtitle, fgColor=fgPick, bgColor=bgPick})
 end
 
 menu.listPersonnel = function()
@@ -399,7 +411,7 @@ menu.approvePending = function()
     if p.type == "door" then
         section("APPROVE DOOR #"..p.id)
         local doorName = ui.prompt("Door name (unique): ")
-        local zone = pickFromList("ZONE", ZONES)
+        local zone = pickFromList("ZONE", getZones())
         section("APPROVE DOOR #"..p.id)
         term.setCursorPos(2, 5); local mc = tonumber(ui.prompt("Min clearance (0-5): "))
         term.setCursorPos(2, 6); local flag = ui.prompt("Required flag (blank): ")
@@ -408,22 +420,22 @@ menu.approvePending = function()
             minClearance=mc, requiredFlag = flag ~= "" and flag or nil,
         }), "DOOR APPROVED")
     elseif p.type == "alarm" or p.type == "siren" then
-        local zone = pickFromList("SIREN ZONE", ZONES)
+        local zone = pickFromList("SIREN ZONE", getZones())
         showResult(sendAdmin("add_alarm", {terminalId=p.id, zone=zone}), "SIREN APPROVED")
     elseif p.type == "detector" then
-        local zone = pickFromList("DETECTOR ZONE", ZONES)
+        local zone = pickFromList("DETECTOR ZONE", getZones())
         showResult(sendAdmin("add_detector", {terminalId=p.id, zone=zone}), "DETECTOR APPROVED")
     elseif p.type == "chamber" then
         section("APPROVE CHAMBER #"..p.id)
         local entityId = ui.prompt("Link to entity ID (e.g. CTN-001) [blank for none]: ")
-        local zone = pickFromList("CHAMBER ZONE", ZONES)
+        local zone = pickFromList("CHAMBER ZONE", getZones())
         showResult(sendAdmin("add_chamber", {
             terminalId=p.id, entityId = entityId ~= "" and entityId or nil, zone=zone,
         }), "CHAMBER APPROVED")
     elseif p.type == "action" then
         section("APPROVE ACTION TERMINAL #"..p.id)
         local label = ui.prompt("Label (e.g. 'HCZ Guard Post'): ")
-        local zone = pickFromList("ACTION TERMINAL ZONE", ZONES)
+        local zone = pickFromList("ACTION TERMINAL ZONE", getZones())
         showResult(sendAdmin("add_action", {
             terminalId=p.id, label=label, zone=zone,
         }), "ACTION TERMINAL APPROVED")
@@ -441,7 +453,7 @@ menu.addEntity = function()
     term.setCursorPos(2, 6); local name = ui.prompt("Name / designation: ")
     local class = pickFromList("OBJECT CLASS", CLASSES)
     section("REGISTER ENTITY: "..id)
-    local zone = pickFromList("ZONE", ZONES)
+    local zone = pickFromList("ZONE", getZones())
     section("REGISTER ENTITY: "..id)
     term.setCursorPos(2, 5); local threat = tonumber(ui.prompt("Threat level (1-5): "))
     term.setCursorPos(2, 6); local mc = tonumber(ui.prompt("Min clearance for procedures (0-5): "))
@@ -660,9 +672,60 @@ menu.logout = function()
     ui.bigStatus(term.current(), {"SESSION ENDED"}, "idle"); sleep(1)
 end
 
--- ============================================================
--- Main loop
--- ============================================================
+menu.addZone = function()
+    section("ADD ZONE")
+    local name = ui.prompt("Zone name: ")
+    if not name or name == "" then return end
+    showResult(sendAdmin("add_zone", {name=name}), "ZONE ADDED: "..name)
+end
+
+menu.removeZone = function()
+    section("REMOVE ZONE")
+    local r = sendAdmin("list_zones", {})
+    if not r then
+        ui.bigStatus(term.current(), {"MAINFRAME","UNREACHABLE"}, "error"); sleep(1.5); return
+    end
+    -- list_zones returns raw array from db.listZones()
+    local zones = {}
+    if type(r) == "table" then
+        for _, z in ipairs(r) do
+            if type(z) == "table" and z.name then zones[#zones+1] = z.name end
+        end
+    end
+    if #zones == 0 then
+        ui.bigStatus(term.current(), {"NO ZONES"}, "idle"); sleep(1.5); return
+    end
+    local pick = pickFromList("REMOVE WHICH ZONE", zones)
+    if not pick then return end
+    if not ui.confirm("Remove zone: "..pick.."?") then return end
+    showResult(sendAdmin("remove_zone", {name=pick}), "ZONE REMOVED")
+end
+
+menu.listZones = function()
+    section("ZONES")
+    local r = sendAdmin("list_zones", {})
+    if not r then
+        ui.bigStatus(term.current(), {"MAINFRAME","UNREACHABLE"}, "error"); sleep(2); return
+    end
+    local zones = type(r) == "table" and r or {}
+    local w, h = term.getSize()
+    local y = 5
+    for _, z in ipairs(zones) do
+        if y >= h - 3 then break end
+        term.setCursorPos(2, y)
+        if z.lockdown then term.setTextColor(ui.ERR); term.write("[LOCK] ")
+        else term.setTextColor(ui.OK); term.write("[open] ") end
+        term.setTextColor(ui.FG); term.write(z.name)
+        local occ = z.occupants and #z.occupants or 0
+        if occ > 0 then term.setTextColor(ui.DIM); term.write("  ("..occ.." personnel)") end
+        y = y + 1
+    end
+    if #zones == 0 then
+        term.setCursorPos(2, 5); term.setTextColor(ui.DIM); term.write("No zones configured.")
+    end
+    term.setCursorPos(2, h - 2); term.setTextColor(ui.DIM); term.write("Press any key...")
+    os.pullEvent("key")
+end
 login()
 
 local options = {
@@ -674,6 +737,9 @@ local options = {
     {"Revoke ID card",      menu.revokeDisk},
     {"List ID cards",       menu.listDisks},
     {"List doors",          menu.listDoors},
+    {"Add zone",            menu.addZone},
+    {"Remove zone",         menu.removeZone},
+    {"List zones",          menu.listZones},
     {"Approve pending",     menu.approvePending},
     {"Add entity",          menu.addEntity},
     {"List entities",       menu.listEntities},

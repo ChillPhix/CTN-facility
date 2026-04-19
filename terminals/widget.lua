@@ -42,7 +42,13 @@ local function getBackend()
     return backend
 end
 
-local ZONES = {"Office","Security","Testing","LCZ","HCZ"}
+local function getZones()
+    local z = {}
+    for name in pairs(status.zones or {}) do z[#z+1] = name end
+    table.sort(z)
+    if #z == 0 then z = {"(no zones)"} end
+    return z
+end
 
 -- Status cache
 local status = {
@@ -146,7 +152,7 @@ local function drawZones(be)
     if be.mode == "gpu" then
         local p = gpu.panel(be, 4, 4, w-8, h-8, "ZONE STATUS", "normal")
         local y = p.contentY + 4
-        for _, zn in ipairs(ZONES) do
+        for _, zn in ipairs(getZones()) do
             if y > p.y + p.h - 16 then break end
             local z = status.zones[zn] or {}
             local st = z.lockdown and "err" or "ok"
@@ -161,7 +167,7 @@ local function drawZones(be)
     else
         local p = gpu.panel(be, 1, 1, w, h, "ZONES", "normal")
         local y = p.contentY
-        for _, zn in ipairs(ZONES) do
+        for _, zn in ipairs(getZones()) do
             if y > p.y + p.h - 2 then break end
             local z = status.zones[zn] or {}
             local col = z.lockdown and gpu.COLORS.err or gpu.COLORS.ok
@@ -229,7 +235,7 @@ local function drawPersonnel(be)
         local p = gpu.panel(be, 4, 4, w-8, h-8, "PERSONNEL / ZONE", "normal")
         local y = p.contentY + 4
         local total = 0
-        for _, zn in ipairs(ZONES) do
+        for _, zn in ipairs(getZones()) do
             if y > p.y + p.h - 30 then break end
             local z = status.zones[zn] or {}
             local occ = z.occupants and #z.occupants or 0
@@ -245,7 +251,7 @@ local function drawPersonnel(be)
         local p = gpu.panel(be, 1, 1, w, h, "PERSONNEL", "normal")
         local y = p.contentY
         local total = 0
-        for _, zn in ipairs(ZONES) do
+        for _, zn in ipairs(getZones()) do
             if y > p.y + p.h - 3 then break end
             local z = status.zones[zn] or {}
             local occ = z.occupants and #z.occupants or 0

@@ -84,7 +84,7 @@ M.COLORS = {
     panelHdrFg = { 0,   0,   0},
 }
 
---- Apply an RGB color scheme by name.
+--- Apply an RGB color scheme by name (legacy single-color).
 function M.applyScheme(schemeName)
     local scheme = M.RGB_SCHEMES[schemeName] or M.RGB_SCHEMES.yellow
     M.COLORS.fg       = scheme.fg
@@ -93,7 +93,42 @@ function M.applyScheme(schemeName)
     M.COLORS.panelBg  = scheme.panelBg
     M.COLORS.panelHdr = scheme.panelHdr
     M.COLORS.panelHdrFg = scheme.panelHdrFg
-    -- Fixed colors stay the same
+    for k, v in pairs(FIXED_COLORS) do M.COLORS[k] = v end
+end
+
+-- CC color name -> approximate RGB for GPU
+local CC_TO_RGB = {
+    white={255,255,255}, orange={255,140,0}, magenta={180,50,180},
+    lightBlue={100,180,255}, yellow={255,204,0}, lime={100,255,50},
+    pink={255,100,150}, gray={76,76,76}, lightGray={153,153,153},
+    cyan={0,204,255}, purple={163,73,164}, blue={50,100,220},
+    brown={120,72,0}, green={34,200,76}, red={220,40,40}, black={0,0,0},
+}
+
+--- Apply two-color scheme by CC color names (matches ctnui).
+function M.applyColors(fgName, bgName)
+    fgName = fgName or "yellow"
+    bgName = bgName or "black"
+    local fgRGB = CC_TO_RGB[fgName] or {255,204,0}
+    local bgRGB = CC_TO_RGB[bgName] or {0,0,0}
+
+    M.COLORS.fg     = fgRGB
+    M.COLORS.border = fgRGB
+    M.COLORS.bg     = bgRGB
+    M.COLORS.panelHdr = fgRGB
+    M.COLORS.panelHdrFg = bgRGB
+
+    -- Dim is a darkened version of fg
+    M.COLORS.dim = {math.floor(fgRGB[1]*0.4), math.floor(fgRGB[2]*0.4), math.floor(fgRGB[3]*0.4)}
+    -- Panel bg is a very dark tint of fg
+    M.COLORS.panelBg = {math.floor(fgRGB[1]*0.08), math.floor(fgRGB[2]*0.08), math.floor(fgRGB[3]*0.08)}
+    -- Accent contrasts with bg
+    if bgName == "white" or bgName == "lightGray" then
+        M.COLORS.accent = {0,0,0}
+    else
+        M.COLORS.accent = {255,255,255}
+    end
+
     for k, v in pairs(FIXED_COLORS) do M.COLORS[k] = v end
 end
 

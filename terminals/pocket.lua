@@ -32,7 +32,13 @@ local myCfg = cfg.loadOrWizard("pocket", {
 proto.openModem()
 ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
-local ZONES = {"Office","Security","Testing","LCZ","HCZ"}
+local function getZones()
+    local z = {}
+    for name in pairs(status.zones or {}) do z[#z+1] = name end
+    table.sort(z)
+    if #z == 0 then z = {"(no zones)"} end
+    return z
+end
 
 -- ============================================================
 -- Session (wiped on every boot = every time you open the tablet)
@@ -62,12 +68,8 @@ local status = {
 -- Network helpers
 -- ============================================================
 local function sendCmd(action, args)
-    return proto.request(MAINFRAME, "facility_command", {
-        passcode = session.pin,
-        issuedBy = session.person.name,
-        action   = action,
-        args     = args or {},
-    }, 4)
+    -- Route through tablet_request with PIN auth instead of facility_command
+    return tabletRequest(action, args or {})
 end
 
 local function tabletRequest(action, payload)
@@ -267,7 +269,7 @@ end
 
 local function pickZone()
     local items = {}
-    for _, z in ipairs(ZONES) do
+    for _, z in ipairs(getZones()) do
         items[#items+1] = {label=z, value=z}
     end
     local idx = scrollList("SELECT ZONE", items)
@@ -294,7 +296,7 @@ local function viewStatus()
     y = y + 2
 
     -- Zones
-    for _, zn in ipairs(ZONES) do
+    for _, zn in ipairs(getZones()) do
         if y >= h - 2 then break end
         local z = status.zones[zn] or {}
         local occ = z.occupants and #z.occupants or 0
