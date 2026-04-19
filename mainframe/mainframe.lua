@@ -134,20 +134,28 @@ local function drawStatus()
         -- Zone status
         t.setCursorPos(2, 8); t.setTextColor(ui.FG); t.write("ZONES:")
         local y = 9
-        for _, zname in ipairs({"Office","Security","Testing","LCZ","HCZ"}) do
-            if y < h - 4 then
-                local z = db.get().zones[zname]
-                t.setCursorPos(4, y); t.setTextColor(ui.DIM); t.write(zname..": ")
-                if z.lockdown then
-                    t.setTextColor(ui.ERR); t.write("LOCKDOWN")
-                else
-                    t.setTextColor(ui.OK); t.write("normal")
+        local zoneNames = db.getZoneNames()
+        if #zoneNames == 0 then
+            t.setCursorPos(4, y); t.setTextColor(ui.DIM); t.write("(no zones configured)")
+            y = y + 1
+        else
+            for _, zname in ipairs(zoneNames) do
+                if y < h - 4 then
+                    local z = db.get().zones[zname]
+                    t.setCursorPos(4, y); t.setTextColor(ui.DIM); t.write(zname..": ")
+                    if z and z.lockdown then
+                        t.setTextColor(ui.ERR); t.write("LOCKDOWN")
+                    elseif z then
+                        t.setTextColor(ui.OK); t.write("normal")
+                    else
+                        t.setTextColor(ui.WARN); t.write("???")
+                    end
+                    local occ = z and z.occupants and #z.occupants or 0
+                    if occ > 0 then
+                        t.setTextColor(ui.DIM); t.write("  ["..occ.." ppl]")
+                    end
+                    y = y + 1
                 end
-                local occ = #(z.occupants or {})
-                if occ > 0 then
-                    t.setTextColor(ui.DIM); t.write("  ["..occ.." in zone]")
-                end
-                y = y + 1
             end
         end
 
