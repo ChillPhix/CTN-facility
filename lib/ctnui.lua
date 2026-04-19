@@ -1,12 +1,68 @@
 -- ctnui.lua
 -- Shared UI library for CTN terminals.
--- Yellow-on-black CTN Containment Division theme.
+-- Supports dynamic color schemes per-facility.
 -- Place at /lib/ctnui.lua on every computer that has a UI.
 
 local M = {}
 
 -- ============================================================
--- Theme
+-- Color schemes
+-- ============================================================
+M.SCHEMES = {
+    yellow = {
+        fg = colors.yellow, bg = colors.black, dim = colors.gray,
+        border = colors.yellow, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+    red = {
+        fg = colors.red, bg = colors.black, dim = colors.gray,
+        border = colors.red, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+    cyan = {
+        fg = colors.cyan, bg = colors.black, dim = colors.gray,
+        border = colors.cyan, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+    green = {
+        fg = colors.green, bg = colors.black, dim = colors.gray,
+        border = colors.green, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+    purple = {
+        fg = colors.purple, bg = colors.black, dim = colors.gray,
+        border = colors.purple, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+    blue = {
+        fg = colors.blue, bg = colors.black, dim = colors.gray,
+        border = colors.blue, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+    white = {
+        fg = colors.white, bg = colors.black, dim = colors.gray,
+        border = colors.white, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.lightBlue,
+    },
+    orange = {
+        fg = colors.orange, bg = colors.black, dim = colors.gray,
+        border = colors.orange, ok = colors.lime, warn = colors.yellow,
+        err = colors.red, accent = colors.white,
+    },
+    lime = {
+        fg = colors.lime, bg = colors.black, dim = colors.gray,
+        border = colors.lime, ok = colors.green, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+    pink = {
+        fg = colors.pink, bg = colors.black, dim = colors.gray,
+        border = colors.pink, ok = colors.lime, warn = colors.orange,
+        err = colors.red, accent = colors.white,
+    },
+}
+
+-- ============================================================
+-- Theme (defaults to yellow, can be swapped at runtime)
 -- ============================================================
 M.BG      = colors.black
 M.FG      = colors.yellow
@@ -16,6 +72,61 @@ M.OK      = colors.lime
 M.WARN    = colors.orange
 M.ERR     = colors.red
 M.ACCENT  = colors.white
+
+-- Facility identity (set by applyIdentity)
+M.facilityName     = "C.T.N"
+M.facilitySubtitle = "CONTAINMENT DIVISION"
+M.colorSchemeName  = "yellow"
+
+--- Apply a color scheme by name.
+function M.applyScheme(schemeName)
+    local scheme = M.SCHEMES[schemeName] or M.SCHEMES.yellow
+    M.BG      = scheme.bg
+    M.FG      = scheme.fg
+    M.DIM     = scheme.dim
+    M.BORDER  = scheme.border
+    M.OK      = scheme.ok
+    M.WARN    = scheme.warn
+    M.ERR     = scheme.err
+    M.ACCENT  = scheme.accent
+    M.colorSchemeName = schemeName
+end
+
+--- Apply full facility identity (name + subtitle + colors).
+-- Called by terminals after receiving identity from mainframe.
+function M.applyIdentity(identity)
+    if not identity then return end
+    M.facilityName     = identity.name or M.facilityName
+    M.facilitySubtitle = identity.subtitle or M.facilitySubtitle
+    if identity.colorScheme then
+        M.applyScheme(identity.colorScheme)
+    end
+end
+
+--- Save identity to a local cache file so it persists across reboots
+--- even before the mainframe is contacted.
+function M.cacheIdentity()
+    local f = fs.open("/.ctn_identity", "w")
+    f.write(textutils.serialize({
+        name = M.facilityName,
+        subtitle = M.facilitySubtitle,
+        colorScheme = M.colorSchemeName,
+    }))
+    f.close()
+end
+
+--- Load cached identity from disk (if any).
+function M.loadCachedIdentity()
+    if not fs.exists("/.ctn_identity") then return false end
+    local f = fs.open("/.ctn_identity", "r")
+    local s = f.readAll(); f.close()
+    local ok, t = pcall(textutils.unserialize, s)
+    if ok and type(t) == "table" then
+        M.applyIdentity(t)
+        return true
+    end
+    return false
+end
 
 -- ============================================================
 -- Low-level helpers
@@ -86,14 +197,14 @@ end
 -- ============================================================
 
 --- Draw the CTN header bar across the top of the screen.
--- Shows "C.T.N - CONTAINMENT DIVISION" and a subtitle line.
+-- Shows facility name and a subtitle line.
 function M.header(t, subtitle)
     t = M.target(t)
     local w = select(1, t.getSize())
-    -- Top banner: yellow background, black text
+    -- Top banner: themed color background
     t.setCursorPos(1, 1); t.setBackgroundColor(M.FG); t.setTextColor(M.BG)
     t.write(string.rep(" ", w))
-    local title = "C.T.N  -  CONTAINMENT DIVISION"
+    local title = M.facilityName .. "  -  " .. M.facilitySubtitle
     t.setCursorPos(math.max(1, math.floor((w - #title)/2)+1), 1)
     t.write(title)
     -- Subtitle line
@@ -129,7 +240,7 @@ function M.frame(t, subtitle, footerText)
     t = M.target(t)
     M.clear(t)
     M.header(t, subtitle)
-    M.footer(t, footerText or "C.T.N SECURE TERMINAL")
+    M.footer(t, footerText or M.facilityName.." SECURE TERMINAL")
 end
 
 --- Content-area bounds after frame(): returns x1, y1, x2, y2.
@@ -209,7 +320,7 @@ function M.bigStatus(t, lines, state)
         M.center(t, boxY + 1 + i, line, stateColor)
     end
 
-    M.footer(t, "C.T.N // "..string.upper(state or "status"))
+    M.footer(t, M.facilityName.." // "..string.upper(state or "status"))
 end
 
 --- Blocking confirmation dialog on the console. Returns true/false.
@@ -393,6 +504,25 @@ function M.badge(t, x, y, label, fg, bg)
     t.setCursorPos(x, y); t.setBackgroundColor(bg or M.FG); t.setTextColor(fg or M.BG)
     t.write(" "..label.." ")
     t.setBackgroundColor(M.BG); t.setTextColor(M.FG)
+end
+
+--- Call on terminal boot to load cached identity. Returns true if loaded.
+function M.bootIdentity()
+    return M.loadCachedIdentity()
+end
+
+--- Call when receiving a reply from mainframe that includes identity.
+--- Updates colors + caches to disk for next boot.
+function M.syncIdentity(reply)
+    if reply and reply.identity then
+        M.applyIdentity(reply.identity)
+        M.cacheIdentity()
+        -- Also sync GPU colors if ctngpu is loaded
+        local ok, gpu = pcall(require, "ctngpu")
+        if ok and gpu and gpu.applyScheme then
+            gpu.applyScheme(reply.identity.colorScheme or "yellow")
+        end
+    end
 end
 
 return M

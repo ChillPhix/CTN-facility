@@ -27,6 +27,7 @@ local myCfg = cfg.loadOrWizard("action", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME   = myCfg.mainframe_id
 local ZONE        = myCfg.zone
 local LABEL       = myCfg.label
@@ -46,10 +47,11 @@ if monitor then monitor.setTextScale(0.5) end
 
 -- Announce to mainframe
 local function announce()
-    proto.request(MAINFRAME, "announce", {
+    local _aReply = proto.request(MAINFRAME, "announce", {
         type = "action",
         hostname = os.getComputerLabel() or LABEL,
     }, 2)
+    ui.syncIdentity(_aReply)
 end
 
 -- ============================================================

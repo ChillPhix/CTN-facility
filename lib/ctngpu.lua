@@ -12,23 +12,90 @@
 local M = {}
 
 -- ============================================================
--- CTN color palette (RGB, 0-255)
+-- CTN color palette (RGB, 0-255) — dynamic per facility
 -- ============================================================
+M.RGB_SCHEMES = {
+    yellow = {
+        fg={255,204,0}, dim={102,82,0}, border={255,204,0},
+        panelBg={20,18,5}, panelHdr={255,204,0}, panelHdrFg={0,0,0},
+    },
+    red = {
+        fg={220,40,40}, dim={100,20,20}, border={220,40,40},
+        panelBg={20,5,5}, panelHdr={220,40,40}, panelHdrFg={0,0,0},
+    },
+    cyan = {
+        fg={0,204,255}, dim={0,80,100}, border={0,204,255},
+        panelBg={5,18,20}, panelHdr={0,204,255}, panelHdrFg={0,0,0},
+    },
+    green = {
+        fg={34,200,76}, dim={15,80,30}, border={34,200,76},
+        panelBg={5,20,8}, panelHdr={34,200,76}, panelHdrFg={0,0,0},
+    },
+    purple = {
+        fg={163,73,164}, dim={70,30,70}, border={163,73,164},
+        panelBg={16,5,16}, panelHdr={163,73,164}, panelHdrFg={0,0,0},
+    },
+    blue = {
+        fg={50,100,220}, dim={20,40,90}, border={50,100,220},
+        panelBg={5,8,20}, panelHdr={50,100,220}, panelHdrFg={255,255,255},
+    },
+    white = {
+        fg={230,230,230}, dim={100,100,100}, border={230,230,230},
+        panelBg={15,15,15}, panelHdr={230,230,230}, panelHdrFg={0,0,0},
+    },
+    orange = {
+        fg={255,140,0}, dim={100,55,0}, border={255,140,0},
+        panelBg={20,12,0}, panelHdr={255,140,0}, panelHdrFg={0,0,0},
+    },
+    lime = {
+        fg={100,255,50}, dim={40,100,20}, border={100,255,50},
+        panelBg={8,20,4}, panelHdr={100,255,50}, panelHdrFg={0,0,0},
+    },
+    pink = {
+        fg={255,100,150}, dim={100,40,60}, border={255,100,150},
+        panelBg={20,8,12}, panelHdr={255,100,150}, panelHdrFg={0,0,0},
+    },
+}
+
+-- Shared colors that don't change per scheme
+local FIXED_COLORS = {
+    bg      = {0,0,0},
+    ok      = {34,177,76},
+    warn    = {255,140,0},
+    err     = {237,28,36},
+    accent  = {255,255,255},
+    accent2 = {0,204,255},
+    purple  = {163,73,164},
+}
+
 M.COLORS = {
-    bg       = {  0,   0,   0},   -- black
-    fg       = {255, 204,   0},   -- CTN yellow
-    dim      = {102,  82,   0},   -- dimmed yellow
+    bg       = {  0,   0,   0},
+    fg       = {255, 204,   0},
+    dim      = {102,  82,   0},
     border   = {255, 204,   0},
-    ok       = { 34, 177,  76},   -- green
-    warn     = {255, 140,   0},   -- orange
-    err      = {237,  28,  36},   -- red
+    ok       = { 34, 177,  76},
+    warn     = {255, 140,   0},
+    err      = {237,  28,  36},
     accent   = {255, 255, 255},
-    accent2  = {  0, 204, 255},   -- cyan (for info)
+    accent2  = {  0, 204, 255},
     purple   = {163,  73, 164},
-    panelBg  = { 20,  18,   5},   -- very dark yellow-tinted bg for panels
+    panelBg  = { 20,  18,   5},
     panelHdr = {255, 204,   0},
     panelHdrFg = { 0,   0,   0},
 }
+
+--- Apply an RGB color scheme by name.
+function M.applyScheme(schemeName)
+    local scheme = M.RGB_SCHEMES[schemeName] or M.RGB_SCHEMES.yellow
+    M.COLORS.fg       = scheme.fg
+    M.COLORS.dim      = scheme.dim
+    M.COLORS.border   = scheme.border
+    M.COLORS.panelBg  = scheme.panelBg
+    M.COLORS.panelHdr = scheme.panelHdr
+    M.COLORS.panelHdrFg = scheme.panelHdrFg
+    -- Fixed colors stay the same
+    for k, v in pairs(FIXED_COLORS) do M.COLORS[k] = v end
+end
 
 local CC_COLOR_MAP = {
     bg       = colors.black,

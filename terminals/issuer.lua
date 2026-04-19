@@ -11,6 +11,7 @@ local myCfg = cfg.loadOrWizard("issuer", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 
 local function findPeripheral(typeName)

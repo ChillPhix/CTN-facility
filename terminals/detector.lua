@@ -17,6 +17,7 @@ local myCfg = cfg.loadOrWizard("detector", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 local RADIUS    = myCfg.radius
 
@@ -48,10 +49,11 @@ if not pd then
 end
 
 local function announce()
-    proto.request(MAINFRAME, "announce", {
+    local _aReply = proto.request(MAINFRAME, "announce", {
         type = "detector",
         hostname = os.getComputerLabel() or ("detector-"..os.getComputerID()),
     }, 2)
+    ui.syncIdentity(_aReply)
 end
 
 local state = {players = {}, lastSend = 0, registered = false}

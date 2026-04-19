@@ -17,6 +17,48 @@ local db    = require("db")
 db.load()
 proto.openModem()
 
+-- First-boot identity setup: if no identity is configured, ask.
+local ident = db.getIdentity()
+if not ident.configured then
+    local cfg = require("ctnconfig")
+    ui.clear(term.current())
+    ui.header(term.current(), "MAINFRAME FIRST-RUN")
+    term.setCursorPos(2, 5); term.setTextColor(ui.WARN)
+    print("Configure this facility's identity.")
+    term.setCursorPos(2, 7); term.setTextColor(ui.FG)
+    write("Facility name (e.g. C.T.N): "); term.setTextColor(ui.ACCENT)
+    local name = read()
+    if name == "" then name = "C.T.N" end
+    term.setTextColor(ui.FG)
+    term.setCursorPos(2, 8)
+    write("Subtitle (e.g. CONTAINMENT DIVISION): "); term.setTextColor(ui.ACCENT)
+    local subtitle = read()
+    if subtitle == "" then subtitle = "CONTAINMENT DIVISION" end
+    term.setTextColor(ui.FG)
+    term.setCursorPos(2, 10); print("Color scheme:")
+    local schemeNames = {"yellow","red","cyan","green","purple","blue","white","orange","lime","pink"}
+    for i, s in ipairs(schemeNames) do
+        term.setCursorPos(4, 10 + i); term.setTextColor(ui.DIM)
+        write("["..i.."] "); term.setTextColor(ui.FG); write(s)
+    end
+    term.setCursorPos(2, 11 + #schemeNames); term.setTextColor(ui.FG)
+    write("> "); term.setTextColor(ui.ACCENT)
+    local sn = tonumber(read()) or 1
+    local scheme = schemeNames[sn] or "yellow"
+
+    db.setIdentity(name, subtitle, scheme)
+    -- Mark as configured so we don't ask again
+    local d = db.get()
+    d.identity.configured = true
+    db.save()
+
+    ui.applyIdentity(db.getIdentity())
+    ui.bigStatus(term.current(), {"IDENTITY SET", "", name, subtitle, scheme:upper()}, "granted")
+    sleep(2)
+else
+    ui.applyIdentity(ident)
+end
+
 -- Optional monitor for the mainframe status display
 local monitor
 for _, side in ipairs(peripheral.getNames()) do
@@ -138,16 +180,17 @@ end
 function handlers.announce(from, payload)
     -- If already known, just acknowledge without re-pending.
     local data = db.get()
+    local ident = db.getIdentity()
     if data.doors then
         for _, d in pairs(data.doors) do
-            if d.terminalId == from then return {ok=true, known=true, kind="door"} end
+            if d.terminalId == from then return {ok=true, known=true, kind="door", identity=ident} end
         end
     end
-    if data.alarms[from] then return {ok=true, known=true, kind="alarm"} end
-    if data.detectors[from] then return {ok=true, known=true, kind="detector"} end
-    if data.chambers[from] then return {ok=true, known=true, kind="chamber"} end
-    if data.actions and data.actions[from] then return {ok=true, known=true, kind="action"} end
-    if data.pending[from] then return {ok=true, pending=true} end
+    if data.alarms[from] then return {ok=true, known=true, kind="alarm", identity=ident} end
+    if data.detectors[from] then return {ok=true, known=true, kind="detector", identity=ident} end
+    if data.chambers[from] then return {ok=true, known=true, kind="chamber", identity=ident} end
+    if data.actions and data.actions[from] then return {ok=true, known=true, kind="action", identity=ident} end
+    if data.pending[from] then return {ok=true, pending=true, identity=ident} end
 
     -- Map "siren" to alarm type in the queue (same slot)
     local pType = payload.type
@@ -155,12 +198,12 @@ function handlers.announce(from, payload)
 
     -- Widgets are read-only; no approval needed, auto-acknowledge
     if pType == "widget" then
-        return {ok=true, known=true, kind="widget"}
+        return {ok=true, known=true, kind="widget", identity=ident}
     end
 
     db.addPending(from, pType, payload.hostname)
     db.log("admin", "new terminal announced: "..pType, {from=from, hostname=payload.hostname})
-    return {ok=true, pending=true}
+    return {ok=true, pending=true, identity=ident}
 end
 
 -- Issuer: {passcode, diskID, playerName, clearance, department, issuedBy}
@@ -531,6 +574,7 @@ function handlers.status_request(from, payload)
         zones=data.zones,
         breaches=db.activeBreaches(),
         recentLog=db.readLog(15),
+        identity=db.getIdentity(),
     }
 end
 
@@ -783,6 +827,17 @@ adminActions.set_pin = function(args)
     if not args.name or not args.pin then return {ok=false, reason="missing_args"} end
     if db.setPin(args.name, args.pin) then return {ok=true} end
     return {ok=false, reason="not_found"}
+end
+
+adminActions.set_identity = function(args)
+    db.setIdentity(args.name, args.subtitle, args.colorScheme)
+    local d = db.get()
+    d.identity.configured = true
+    db.save()
+    db.log("admin", "facility identity changed: "..(args.name or "?"), {
+        name=args.name, subtitle=args.subtitle, colorScheme=args.colorScheme,
+    })
+    return {ok=true}
 end
 
 adminActions.add_door = function(args)

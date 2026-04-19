@@ -23,6 +23,7 @@ local myCfg = cfg.loadOrWizard("control", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 
 local ZONES = {"Office","Security","Testing","LCZ","HCZ"}
 
@@ -76,6 +77,7 @@ local function refreshStatus()
         status.breaches = reply.breaches or {}
         status.recentLog = reply.recentLog or {}
         status.lastUpdate = os.epoch("utc")
+        ui.syncIdentity(reply)
     end
     -- Also pull entity list (read-only via facility_command)
     if session.passcode then

@@ -21,6 +21,7 @@ local myCfg = cfg.loadOrWizard("siren", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 local RS_SIDE   = myCfg.rs_side ~= "none" and myCfg.rs_side or nil
 local VOLUME    = math.max(1, math.min(3, myCfg.volume or 3))
@@ -110,10 +111,11 @@ local PATTERNS = {
 -- Announce to mainframe
 -- ============================================================
 local function announce()
-    proto.request(MAINFRAME, "announce", {
+    local _aReply = proto.request(MAINFRAME, "announce", {
         type = "siren",
         hostname = os.getComputerLabel() or ("siren-"..os.getComputerID()),
     }, 2)
+    ui.syncIdentity(_aReply)
     -- Legacy "alarm" type also, so mainframe registers us under either name
     proto.request(MAINFRAME, "announce", {
         type = "alarm",

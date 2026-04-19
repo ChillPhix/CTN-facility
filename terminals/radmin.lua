@@ -12,6 +12,7 @@ local myCfg = cfg.loadOrWizard("radmin", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 
 local DEPARTMENTS = {"Security","Research","MTF","Medical","Admin","Janitor","Guest","Ethics","Director"}
@@ -231,6 +232,9 @@ local function login()
         if not reply then
             ui.bigStatus(term.current(), {"MAINFRAME","UNREACHABLE"}, "error"); sleep(2)
         elseif reply.ok then
+            -- Sync facility identity
+            local sr = proto.request(MAINFRAME, "status_request", {}, 2)
+            ui.syncIdentity(sr)
             ui.bigStatus(term.current(), {"ACCESS GRANTED","","Welcome, "..username}, "granted"); sleep(1)
             return
         else
@@ -286,6 +290,23 @@ menu.setPin = function()
         ui.bigStatus(term.current(), {"CANCELLED"}, "idle"); sleep(1); return
     end
     showResult(sendAdmin("set_pin", {name=name, pin=pin}), "PIN SET: "..name)
+end
+
+menu.setIdentity = function()
+    section("SET FACILITY IDENTITY")
+    local name = ui.prompt("Facility name (e.g. O.M.E.G.A): ")
+    if name == "" then return end
+    term.setCursorPos(2, 6)
+    local subtitle = ui.prompt("Subtitle (e.g. RESEARCH DIVISION): ")
+    if subtitle == "" then subtitle = "FACILITY SYSTEM" end
+    local schemeNames = {"yellow","red","cyan","green","purple","blue","white","orange","lime","pink"}
+    local sn = pickFromList("COLOR SCHEME", schemeNames)
+    if not sn then return end
+    showResult(sendAdmin("set_identity", {
+        name=name, subtitle=subtitle, colorScheme=sn,
+    }), "IDENTITY UPDATED")
+    -- Apply locally too
+    ui.applyIdentity({name=name, subtitle=subtitle, colorScheme=sn})
 end
 
 menu.listPersonnel = function()
@@ -661,9 +682,10 @@ local options = {
     {"Add archive folder",  menu.addFolder},
     {"Add document",        menu.addDocument},
     {"Delete archive item", menu.deleteArchiveItem},
-    {"Set passcode",        menu.setPasscode},
-    {"Set tablet PIN",      menu.setPin},
-    {"View security log",   menu.viewLog},
+    {"Set passcode",         menu.setPasscode},
+    {"Set tablet PIN",       menu.setPin},
+    {"Set facility identity", menu.setIdentity},
+    {"View security log",    menu.viewLog},
     {"Log out",             function() menu.logout(); login() end},
 }
 

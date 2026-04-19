@@ -30,6 +30,7 @@ local myCfg = cfg.loadOrWizard("widget", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 local WIDGET    = myCfg.widget_type
 
@@ -299,10 +300,11 @@ local RENDERERS = {
 }
 
 local function announce()
-    proto.request(MAINFRAME, "announce", {
+    local _aReply = proto.request(MAINFRAME, "announce", {
         type = "widget",
         hostname = os.getComputerLabel() or ("widget-"..WIDGET),
     }, 2)
+    ui.syncIdentity(_aReply)
 end
 
 -- ============================================================

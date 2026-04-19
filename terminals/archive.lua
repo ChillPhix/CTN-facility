@@ -14,6 +14,7 @@ local myCfg = cfg.loadOrWizard("archive", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 
 local function findPeripheral(typeName)

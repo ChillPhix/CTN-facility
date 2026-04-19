@@ -30,6 +30,7 @@ local myCfg = cfg.loadOrWizard("pocket", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 local ZONES = {"Office","Security","Testing","LCZ","HCZ"}
 
@@ -85,6 +86,7 @@ local function refreshStatus()
         status.breaches  = reply.breaches or {}
         status.recentLog = reply.recentLog or {}
         status.lastUpdate = os.epoch("utc")
+        ui.syncIdentity(reply)
     end
     -- Entities
     local er = tabletRequest("list_entities")

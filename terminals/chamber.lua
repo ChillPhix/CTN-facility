@@ -23,6 +23,7 @@ local myCfg = cfg.loadOrWizard("chamber", {
 })
 
 proto.openModem()
+ui.bootIdentity()
 
 local MAINFRAME = myCfg.mainframe_id
 local RS_SIDE   = myCfg.redstone_side ~= "none" and myCfg.redstone_side or nil
@@ -43,10 +44,11 @@ local drive = findPeripheral("drive")
 -- Announce ourselves for admin approval
 -- ============================================================
 local function announce()
-    proto.request(MAINFRAME, "announce", {
+    local reply = proto.request(MAINFRAME, "announce", {
         type = "chamber",
         hostname = os.getComputerLabel() or ("chamber-"..os.getComputerID()),
     }, 2)
+    ui.syncIdentity(reply)
 end
 
 -- ============================================================

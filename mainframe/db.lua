@@ -53,6 +53,11 @@ local data = {
     },
     passcodes = { issuer = "0000", control = "0000", admin = "0000" },
     facility  = { state = "normal" },
+    identity  = {
+        name     = "C.T.N",
+        subtitle = "CONTAINMENT DIVISION",
+        colorScheme = "yellow",  -- key into SCHEMES table
+    },
     documents = {},
     archiveFolders = {
         root = {
@@ -417,6 +422,23 @@ end
 -- ============================================================
 function M.setFacilityState(state)
     data.facility.state = state
+    M.save()
+end
+
+function M.getIdentity()
+    data.identity = data.identity or {
+        name = "C.T.N",
+        subtitle = "CONTAINMENT DIVISION",
+        colorScheme = "yellow",
+    }
+    return data.identity
+end
+
+function M.setIdentity(name, subtitle, colorScheme)
+    data.identity = data.identity or {}
+    data.identity.name = name or data.identity.name or "C.T.N"
+    data.identity.subtitle = subtitle or data.identity.subtitle or "CONTAINMENT DIVISION"
+    data.identity.colorScheme = colorScheme or data.identity.colorScheme or "yellow"
     M.save()
 end
 

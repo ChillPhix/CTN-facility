@@ -22,6 +22,7 @@ local myCfg = cfg.loadOrWizard("door", {
 
 proto.openModem()
 local MAINFRAME = myCfg.mainframe_id
+ui.bootIdentity()
 
 local function findPeripheral(typeName)
     for _, side in ipairs(peripheral.getNames()) do
@@ -36,10 +37,11 @@ local monitor = findPeripheral("monitor")
 if monitor then monitor.setTextScale(1) end
 
 -- Announce ourselves to mainframe for admin approval
-proto.request(MAINFRAME, "announce", {
+local announceReply = proto.request(MAINFRAME, "announce", {
     type = "door",
     hostname = os.getComputerLabel() or myCfg.door_label,
 }, 2)
+ui.syncIdentity(announceReply)
 
 local function drawState(state, lines)
     ui.bigStatus(term.current(), lines, state)
