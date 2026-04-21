@@ -17,17 +17,27 @@ local HOME_MF  = myCfg.mainframe_id
 local MOTTO    = myCfg.motto
 local CALLSIGN = myCfg.callsign
 
+-- Find monitor
+local monitor
+for _, side in ipairs(peripheral.getNames()) do
+    if peripheral.getType(side) == "monitor" then
+        monitor = peripheral.wrap(side)
+        monitor.setTextScale(0.5)
+        break
+    end
+end
+
 -- ============================================================
--- Purple/black theme constants
+-- Colors
 -- ============================================================
-local PUR  = colors.purple
-local BLK  = colors.black
-local WHT  = colors.white
-local GRY  = colors.gray
-local RED  = colors.red
-local GRN  = colors.lime
-local YEL  = colors.yellow
-local CYN  = colors.cyan
+local PUR = colors.purple
+local BLK = colors.black
+local WHT = colors.white
+local GRY = colors.gray
+local RED = colors.red
+local GRN = colors.lime
+local YEL = colors.yellow
+local CYN = colors.cyan
 
 -- ============================================================
 -- ASCII art
@@ -51,30 +61,24 @@ local SHIELD = {
     "        \\/        ",
 }
 
-local SKULL = {
-    "   ______   ",
-    "  /      \\  ",
-    " | (o)(o) | ",
-    " |   /\\   | ",
-    " |  ||||  | ",
-    "  \\______/  ",
-}
-
-local EYE = {
-    "  /---\\  ",
-    " / o o \\ ",
-    " \\  ^  / ",
-    "  \\---/  ",
-}
+-- ============================================================
+-- Render helper: draw to target (monitor or term)
+-- ============================================================
+local function drawOn(t)
+    return t or term.current()
+end
 
 -- ============================================================
--- Boot animation
+-- Boot animation (plays on BOTH screens)
 -- ============================================================
 local function bootSequence()
-    local w, h = term.getSize()
+    local targets = {term.current()}
+    if monitor then targets[#targets+1] = monitor end
 
-    -- Phase 1: black screen with slow text reveal
-    term.setBackgroundColor(BLK); term.clear()
+    for _, t in ipairs(targets) do
+        t.setBackgroundColor(BLK); t.clear()
+    end
+
     local bootLines = {
         {delay=0.3, text="INITIALIZING...", color=GRY},
         {delay=0.2, text="LOADING CRYPTOGRAPHIC MODULES...", color=GRY},
@@ -95,106 +99,91 @@ local function bootSequence()
 
     local y = 2
     for _, line in ipairs(bootLines) do
-        if y >= h - 1 then
-            -- Scroll effect
-            sleep(0.1)
-            term.scroll(1)
-            y = y - 1
-        end
-        term.setCursorPos(2, y)
-        term.setTextColor(line.color)
-        -- Type each character
-        for i = 1, #line.text do
-            term.write(line.text:sub(i, i))
-            if i % 4 == 0 then sleep(0.01) end
+        for _, t in ipairs(targets) do
+            local _, th = t.getSize()
+            if y >= th - 1 then t.scroll(1) end
+            t.setCursorPos(2, math.min(y, th - 1))
+            t.setBackgroundColor(BLK); t.setTextColor(line.color)
+            for i = 1, #line.text do
+                t.write(line.text:sub(i, i))
+                if i % 6 == 0 then sleep(0.01) end
+            end
         end
         y = y + 1
         sleep(line.delay)
     end
-
     sleep(0.3)
 
-    -- Phase 2: Shield splash with animation
-    term.setBackgroundColor(BLK); term.clear()
-
-    -- Draw shield centered
-    local shieldStartY = math.max(1, math.floor((h - #SHIELD) / 2) - 2)
-    for i, line in ipairs(SHIELD) do
-        local x = math.max(1, math.floor((w - #line) / 2) + 1)
-        term.setCursorPos(x, shieldStartY + i - 1)
-        term.setTextColor(PUR)
-        -- Animate: reveal line by line with flash
-        term.write(line)
-        sleep(0.05)
-    end
-
-    sleep(0.3)
-
-    -- Flash effect
-    for flash = 1, 3 do
-        term.setBackgroundColor(PUR); term.clear()
-        sleep(0.05)
-        term.setBackgroundColor(BLK); term.clear()
-        -- Redraw shield
+    -- Phase 2: Shield splash on ALL screens
+    for _, t in ipairs(targets) do
+        t.setBackgroundColor(BLK); t.clear()
+        local w, h = t.getSize()
+        local shieldStartY = math.max(1, math.floor((h - #SHIELD) / 2) - 2)
         for i, line in ipairs(SHIELD) do
             local x = math.max(1, math.floor((w - #line) / 2) + 1)
-            term.setCursorPos(x, shieldStartY + i - 1)
-            term.setTextColor(flash == 3 and WHT or PUR)
-            term.write(line)
+            t.setCursorPos(x, shieldStartY + i - 1)
+            t.setTextColor(PUR); t.write(line)
+        end
+    end
+    sleep(0.3)
+
+    -- Flash
+    for flash = 1, 3 do
+        for _, t in ipairs(targets) do
+            t.setBackgroundColor(PUR); t.clear()
+        end
+        sleep(0.05)
+        for _, t in ipairs(targets) do
+            t.setBackgroundColor(BLK); t.clear()
+            local w, h = t.getSize()
+            local sy = math.max(1, math.floor((h - #SHIELD) / 2) - 2)
+            for i, line in ipairs(SHIELD) do
+                local x = math.max(1, math.floor((w - #line) / 2) + 1)
+                t.setCursorPos(x, sy + i - 1)
+                t.setTextColor(flash == 3 and WHT or PUR); t.write(line)
+            end
         end
         sleep(0.08)
     end
 
-    -- Title under shield
-    local titleY = shieldStartY + #SHIELD + 1
-    local title = "N . O . V . A"
-    local titleX = math.max(1, math.floor((w - #title) / 2) + 1)
-    term.setTextColor(WHT)
-    -- Animate title character by character
-    for i = 1, #title do
-        term.setCursorPos(titleX + i - 1, titleY)
-        term.write(title:sub(i, i))
-        sleep(0.06)
+    -- Title + motto on all screens
+    for _, t in ipairs(targets) do
+        local w, h = t.getSize()
+        local titleY = math.max(1, math.floor((h - #SHIELD) / 2) - 2) + #SHIELD + 1
+        local title = "N . O . V . A"
+        t.setTextColor(WHT)
+        for i = 1, #title do
+            t.setCursorPos(math.max(1, math.floor((w - #title) / 2) + 1) + i - 1, titleY)
+            t.write(title:sub(i, i))
+        end
+        sleep(0.02)
+
+        local sub = "P R O J E C T   O V E R S I G H T"
+        t.setCursorPos(math.max(1, math.floor((w - #sub)/2)+1), titleY + 1)
+        t.setTextColor(PUR); t.write(sub)
+
+        t.setCursorPos(math.max(1, math.floor((w - #MOTTO)/2)+1), titleY + 3)
+        t.setTextColor(GRY); t.write('"'..MOTTO..'"')
+
+        local csLine = "OPERATOR: "..CALLSIGN
+        t.setCursorPos(math.max(1, math.floor((w - #csLine)/2)+1), titleY + 5)
+        t.setTextColor(CYN); t.write(csLine)
     end
-
-    sleep(0.2)
-
-    -- Subtitle
-    local sub = "P R O J E C T   O V E R S I G H T"
-    local subX = math.max(1, math.floor((w - #sub) / 2) + 1)
-    term.setCursorPos(subX, titleY + 1); term.setTextColor(PUR)
-    term.write(sub)
-
-    sleep(0.3)
-
-    -- Motto
-    local mottoX = math.max(1, math.floor((w - #MOTTO) / 2) + 1)
-    term.setCursorPos(mottoX, titleY + 3); term.setTextColor(GRY)
-    term.write('"'..MOTTO..'"')
-
-    sleep(0.4)
-
-    -- Callsign
-    local csLine = "OPERATOR: "..CALLSIGN
-    local csX = math.max(1, math.floor((w - #csLine) / 2) + 1)
-    term.setCursorPos(csX, titleY + 5); term.setTextColor(CYN)
-    term.write(csLine)
-
     sleep(1.5)
 
-    -- Phase 3: Glitch transition
+    -- Glitch transition
     for glitch = 1, 6 do
-        local gy = math.random(1, h)
-        term.setCursorPos(1, gy)
-        term.setTextColor(({PUR, RED, GRN, CYN})[math.random(1, 4)])
-        local noise = ""
-        for i = 1, w do
-            noise = noise .. string.char(math.random(33, 126))
+        for _, t in ipairs(targets) do
+            local w, h = t.getSize()
+            local gy = math.random(1, h)
+            t.setCursorPos(1, gy)
+            t.setTextColor(({PUR, RED, GRN, CYN})[math.random(1, 4)])
+            local noise = ""
+            for i = 1, w do noise = noise .. string.char(math.random(33, 126)) end
+            t.write(noise)
         end
-        term.write(noise)
         sleep(0.04)
     end
-
     sleep(0.2)
 end
 
@@ -225,7 +214,6 @@ local function loadCapturesFile()
     end
     f.close()
 end
-
 loadCapturesFile()
 
 local function tblCount(t)
@@ -233,7 +221,66 @@ local function tblCount(t)
 end
 
 -- ============================================================
--- UI framework
+-- Monitor live feed renderer
+-- ============================================================
+local function drawMonitorFeed()
+    if not monitor then return end
+    local w, h = monitor.getSize()
+    monitor.setBackgroundColor(BLK); monitor.clear()
+
+    -- Header
+    monitor.setCursorPos(1, 1); monitor.setBackgroundColor(PUR); monitor.setTextColor(BLK)
+    monitor.write(string.rep(" ", w))
+    local title = "N.O.V.A // LIVE INTERCEPT"
+    monitor.setCursorPos(math.max(1, math.floor((w-#title)/2)+1), 1); monitor.write(title)
+    monitor.setBackgroundColor(BLK)
+
+    -- Stats bar
+    monitor.setCursorPos(1, 2); monitor.setTextColor(GRY)
+    local phase = math.floor(os.epoch("utc") / 300) % 4
+    local scanAnim = ({"|", "/", "-", "\\"})[phase + 1]
+    local stats = " "..scanAnim.." "..#captures.." cap  "..tblCount(knownHosts).." hosts  "..tblCount(knownProtocols).." proto"
+    monitor.write(stats:sub(1, w))
+    monitor.setCursorPos(1, 3); monitor.setTextColor(PUR); monitor.write(string.rep("-", w))
+
+    -- Live feed (newest at bottom)
+    local feedStart = 4
+    local feedRows = h - feedStart
+    local startIdx = math.max(1, #captures - feedRows + 1)
+
+    for row = 0, feedRows - 1 do
+        local idx = startIdx + row
+        local c = captures[idx]
+        local y = feedStart + row
+        if not c then break end
+
+        local ts = os.date("%H:%M:%S", (c.ts or 0) / 1000)
+        monitor.setCursorPos(1, y)
+        monitor.setTextColor(GRY); monitor.write(ts.." ")
+        monitor.setTextColor(PUR); monitor.write("#"..tostring(c.from):sub(1,4).." ")
+
+        -- Protocol colored by type
+        local pCol = WHT
+        if c.protocol and c.protocol:find("CTN") then pCol = YEL end
+        monitor.setTextColor(pCol); monitor.write((c.protocol or "?"):sub(1, 10).." ")
+
+        -- Message type
+        local tCol = c.hasSignature and YEL or GRN
+        monitor.setTextColor(tCol)
+        local remaining = w - 22
+        monitor.write((c.type or "?"):sub(1, remaining))
+    end
+
+    -- Footer
+    monitor.setCursorPos(1, h); monitor.setBackgroundColor(PUR); monitor.setTextColor(BLK)
+    monitor.write(string.rep(" ", w))
+    local ft = CALLSIGN.."  "..os.date("%H:%M:%S").."  "..scanAnim
+    monitor.setCursorPos(math.max(1, w - #ft), h); monitor.write(ft)
+    monitor.setBackgroundColor(BLK)
+end
+
+-- ============================================================
+-- UI framework (computer screen)
 -- ============================================================
 local function novaHeader(subtitle)
     local w = term.getSize()
@@ -245,11 +292,8 @@ local function novaHeader(subtitle)
     if subtitle then
         term.write(string.rep(" ", w))
         term.setCursorPos(math.max(1, math.floor((w - #subtitle)/2)+1), 2); term.write(subtitle)
-    else
-        term.write(string.rep(" ", w))
-    end
-    term.setCursorPos(1, 3); term.setTextColor(PUR)
-    term.write(string.rep("=", w))
+    else term.write(string.rep(" ", w)) end
+    term.setCursorPos(1, 3); term.setTextColor(PUR); term.write(string.rep("=", w))
     term.setBackgroundColor(BLK)
 end
 
@@ -301,8 +345,7 @@ local function scrollList(title, items, footer)
                     term.setBackgroundColor(BLK); term.setTextColor(item.color or PUR)
                 end
                 local line = (idx == selected and " > " or "   ") .. (item.label or "?")
-                term.write(line:sub(1, w))
-                term.write(string.rep(" ", math.max(0, w - #line)))
+                term.write(line:sub(1, w)); term.write(string.rep(" ", math.max(0, w - #line)))
                 term.setBackgroundColor(BLK)
             end
         end
@@ -310,13 +353,10 @@ local function scrollList(title, items, footer)
         local evt = {os.pullEvent()}
         if evt[1] == "key" then
             if evt[2] == keys.up and selected > 1 then
-                selected = selected - 1
-                if selected < top then top = selected end
+                selected = selected - 1; if selected < top then top = selected end
             elseif evt[2] == keys.down and selected < #items then
-                selected = selected + 1
-                if selected >= top + rows then top = top + 1 end
-            elseif evt[2] == keys.enter and items[selected] then
-                return selected, items[selected]
+                selected = selected + 1; if selected >= top + rows then top = top + 1 end
+            elseif evt[2] == keys.enter and items[selected] then return selected, items[selected]
             elseif evt[2] == keys.q or evt[2] == keys.backspace then return nil end
         elseif evt[1] == "mouse_click" then
             local idx = top + (evt[4] - 4)
@@ -328,14 +368,10 @@ local function scrollList(title, items, footer)
 end
 
 -- ============================================================
--- Network capture processor
+-- Capture processor
 -- ============================================================
 local function processCapture(sender, message, protocol)
-    local entry = {
-        ts = os.epoch("utc"),
-        from = sender,
-        protocol = protocol or "?",
-    }
+    local entry = {ts=os.epoch("utc"), from=sender, protocol=protocol or "?"}
     if type(message) == "table" then
         entry.type = message.type or "?"
         entry.hasSignature = message.sig ~= nil
@@ -347,9 +383,7 @@ local function processCapture(sender, message, protocol)
             for k in pairs(message.payload) do entry.payloadKeys[#entry.payloadKeys+1] = k end
         end
         entry.raw = message
-    else
-        entry.type = "non-table"
-    end
+    else entry.type = "non-table" end
 
     captures[#captures+1] = entry
     while #captures > MAX_CAPTURES do table.remove(captures, 1) end
@@ -375,24 +409,19 @@ end
 local function scannerView()
     local startCount = #captures
     local listenTimer = os.startTimer(0.5)
-
     while true do
         novaClear(); novaHeader("PASSIVE SCANNER // LIVE")
         local w, h = term.getSize()
         local newCaptures = #captures - startCount
+        local phase = math.floor(os.epoch("utc") / 300) % 4
+        local scanAnim = ({"|", "/", "-", "\\"})[phase + 1]
 
-        -- Stats bar
         term.setCursorPos(2, 5); term.setTextColor(GRN)
         term.write(">> INTERCEPTED: "..newCaptures.." new  ("..#captures.." total)")
         term.setCursorPos(2, 6); term.setTextColor(PUR)
         term.write(">> HOSTS: "..tblCount(knownHosts).."  PROTOCOLS: "..tblCount(knownProtocols))
-
-        -- Animated scanner indicator
-        local phase = math.floor(os.epoch("utc") / 300) % 4
-        local scanAnim = ({"|", "/", "-", "\\"})[phase + 1]
         term.setCursorPos(w - 3, 5); term.setTextColor(GRN); term.write("["..scanAnim.."]")
 
-        -- Recent intercepts
         term.setCursorPos(2, 8); term.setTextColor(CYN); term.write("LIVE FEED:")
         term.setCursorPos(2, 9); term.setTextColor(PUR); term.write(string.rep("-", w - 2))
         local y = 10
@@ -409,8 +438,10 @@ local function scannerView()
                 y = y + 1
             end
         end
+        novaFooter("Q=stop  "..scanAnim.." scanning...")
 
-        novaFooter("Q=stop and save  "..scanAnim.." scanning...")
+        -- Also update monitor
+        pcall(drawMonitorFeed)
 
         local evt = {os.pullEvent()}
         if evt[1] == "rednet_message" then
@@ -419,9 +450,8 @@ local function scannerView()
             listenTimer = os.startTimer(0.5)
         elseif evt[1] == "key" and evt[2] == keys.q then
             saveCapturesFile()
-            novaStatus({"SCANNER STOPPED", "", newCaptures.." messages captured", #captures.." total in database"}, "ok")
-            sleep(1.5)
-            return
+            novaStatus({"SCANNER STOPPED","",newCaptures.." captured",#captures.." total"}, "ok")
+            sleep(1.5); return
         end
     end
 end
@@ -442,11 +472,9 @@ local function hostIntel()
         }
     end
     table.sort(items, function(a,b) return (a.host.msgCount or 0) > (b.host.msgCount or 0) end)
-
     local idx, item = scrollList("HOST INTELLIGENCE // "..tblCount(knownHosts).." TARGETS", items)
     if not idx then return end
 
-    -- Detail view
     novaClear(); novaHeader("TARGET: #"..item.id)
     local h_ = item.host
     local w, sh = term.getSize()
@@ -454,8 +482,7 @@ local function hostIntel()
     local function line(label, val, col)
         if y >= sh - 2 then return end
         term.setCursorPos(2, y); term.setTextColor(PUR); term.write(label..": ")
-        term.setTextColor(col or WHT); term.write(tostring(val):sub(1, w - #label - 5))
-        y = y + 1
+        term.setTextColor(col or WHT); term.write(tostring(val):sub(1, w - #label - 5)); y = y + 1
     end
     line("Computer ID", item.id, CYN)
     line("Messages", h_.msgCount)
@@ -474,8 +501,7 @@ local function hostIntel()
         if y >= sh - 2 then break end
         term.setCursorPos(4, y); term.setTextColor(GRY); term.write(t..": "..count); y = y + 1
     end
-    novaFooter("Any key to return")
-    os.pullEvent("key")
+    novaFooter("Any key to return"); os.pullEvent("key")
 end
 
 -- ============================================================
@@ -484,16 +510,14 @@ end
 local function protocolAnalysis()
     local items = {}
     for name, p in pairs(knownProtocols) do
-        local hostCount = tblCount(p.hosts)
         items[#items+1] = {
-            label = string.format("%-15s %4dmsg  %d hosts", name:sub(1,15), p.count, hostCount),
+            label = string.format("%-15s %4dmsg  %d hosts", name:sub(1,15), p.count, tblCount(p.hosts)),
             protocol = p, name = name,
         }
     end
     table.sort(items, function(a,b) return a.protocol.count > b.protocol.count end)
     local idx, item = scrollList("PROTOCOL ANALYSIS", items)
     if not idx then return end
-
     local hostItems = {}
     for hid in pairs(item.protocol.hosts) do
         local h = knownHosts[hid]
@@ -516,14 +540,12 @@ local function captureViewer()
             local ts = os.date("%H:%M:%S", (c.ts or 0) / 1000)
             items[#items+1] = {
                 label = ts.." #"..c.from.." "..c.protocol.." "..tostring(c.type),
-                capture = c,
-                color = c.hasSignature and YEL or GRY,
+                capture = c, color = c.hasSignature and YEL or GRY,
             }
         end
     end
-    local idx, item = scrollList("CAPTURES // "..#captures.." TOTAL", items, "ENTER=inspect  Q=back")
+    local idx, item = scrollList("CAPTURES // "..#captures, items, "ENTER=inspect  Q=back")
     if not idx then return end
-
     local c = item.capture
     novaClear(); novaHeader("INTERCEPT DETAIL")
     local w, h = term.getSize()
@@ -544,8 +566,7 @@ local function captureViewer()
     if c.payloadKeys and #c.payloadKeys > 0 then
         line("Payload fields", table.concat(c.payloadKeys, ", "))
     end
-    novaFooter("Any key to return")
-    os.pullEvent("key")
+    novaFooter("Any key to return"); os.pullEvent("key")
 end
 
 -- ============================================================
@@ -553,64 +574,60 @@ end
 -- ============================================================
 local function signalJammer()
     novaClear(); novaHeader("SIGNAL JAMMER")
-    local w = term.getSize()
     term.setCursorPos(2, 5); term.setTextColor(PUR); term.write("Target protocol: "); term.setTextColor(WHT)
-    local targetProto = read()
-    if not targetProto or targetProto == "" then return end
-    term.setCursorPos(2, 6); term.setTextColor(PUR); term.write("Target host (0=broadcast): "); term.setTextColor(WHT)
+    local targetProto = read(); if not targetProto or targetProto == "" then return end
+    term.setCursorPos(2, 6); term.setTextColor(PUR); term.write("Target host (0=all): "); term.setTextColor(WHT)
     local targetHost = tonumber(read()) or 0
     term.setCursorPos(2, 7); term.setTextColor(PUR); term.write("Duration (seconds): "); term.setTextColor(WHT)
     local duration = tonumber(read()) or 10
-    term.setCursorPos(2, 9); term.setTextColor(RED)
-    term.write("WARNING: This will flood the target network.")
-    term.setCursorPos(2, 11); term.setTextColor(PUR)
-    term.write("Type EXECUTE to confirm: "); term.setTextColor(WHT)
+    term.setCursorPos(2, 9); term.setTextColor(RED); term.write("Type EXECUTE to confirm: "); term.setTextColor(WHT)
     if read() ~= "EXECUTE" then return end
 
     local deadline = os.clock() + duration
     local count = 0
-
+    local w = term.getSize()
     while os.clock() < deadline do
-        local garbage = {
-            proto = targetProto, type = "x"..math.random(1,999999),
-            nonce = tostring(math.random(1,2^30)), ts = os.epoch("utc"),
-            payload = {}, sig = string.rep("0", 64),
-        }
-        if targetHost > 0 then
-            rednet.send(targetHost, garbage, targetProto)
-        else
-            rednet.broadcast(garbage, targetProto)
-        end
+        local garbage = {proto=targetProto, type="x"..math.random(1,999999),
+            nonce=tostring(math.random(1,2^30)), ts=os.epoch("utc"), payload={}, sig=string.rep("0",64)}
+        if targetHost > 0 then rednet.send(targetHost, garbage, targetProto)
+        else rednet.broadcast(garbage, targetProto) end
         count = count + 1
-
         if count % 20 == 0 then
             novaClear(); novaHeader("JAMMING ACTIVE")
-            local phase = math.floor(os.epoch("utc") / 200) % 4
-            local bar = string.rep("#", math.floor((os.clock() - (deadline - duration)) / duration * (w - 6)))
+            local elapsed = os.clock() - (deadline - duration)
+            local bar = string.rep("#", math.floor(elapsed / duration * (w - 6)))
             term.setCursorPos(2, 6); term.setTextColor(RED)
             term.write("TARGET: "..targetProto..(targetHost > 0 and " #"..targetHost or " ALL"))
-            term.setCursorPos(2, 8); term.setTextColor(YEL)
-            term.write("PACKETS SENT: "..count)
-            term.setCursorPos(2, 9); term.setTextColor(PUR)
-            term.write("REMAINING: "..math.floor(deadline - os.clock()).."s")
+            term.setCursorPos(2, 8); term.setTextColor(YEL); term.write("PACKETS: "..count)
+            term.setCursorPos(2, 9); term.setTextColor(PUR); term.write("LEFT: "..math.floor(deadline-os.clock()).."s")
             term.setCursorPos(2, 11); term.setTextColor(RED)
-            term.write("["..bar..string.rep("-", math.max(0, w - 6 - #bar)).."]")
-
-            -- Glitch lines
+            term.write("["..bar..string.rep("-", math.max(0, w-6-#bar)).."]")
             for g = 1, 2 do
-                local gy = math.random(13, select(2, term.getSize()) - 2)
+                local _, sh = term.getSize()
+                local gy = math.random(13, sh - 2)
                 term.setCursorPos(1, gy); term.setTextColor(({RED,PUR,YEL})[math.random(1,3)])
-                local noise = ""
-                for i = 1, w do noise = noise .. string.char(math.random(33, 126)) end
+                local noise = ""; for i = 1, w do noise = noise..string.char(math.random(33,126)) end
                 term.write(noise)
             end
             novaFooter("JAMMING // "..count.." packets")
+            -- Update monitor with jam status
+            if monitor then
+                monitor.setBackgroundColor(BLK); monitor.clear()
+                local mw, mh = monitor.getSize()
+                monitor.setCursorPos(1, 1); monitor.setBackgroundColor(RED); monitor.setTextColor(BLK)
+                monitor.write(string.rep(" ", mw))
+                local jt = "!! JAMMING ACTIVE !!"
+                monitor.setCursorPos(math.max(1,math.floor((mw-#jt)/2)+1), 1); monitor.write(jt)
+                monitor.setBackgroundColor(BLK); monitor.setTextColor(RED)
+                monitor.setCursorPos(2, 4); monitor.write("TARGET: "..targetProto)
+                monitor.setCursorPos(2, 5); monitor.write("PACKETS: "..count)
+                monitor.setCursorPos(2, 7); monitor.setTextColor(YEL)
+                monitor.write("["..bar..string.rep("-", math.max(0, mw-6-#bar)).."]")
+            end
         end
         sleep(0.02)
     end
-
-    novaStatus({"JAM COMPLETE", "", count.." packets sent", "Target: "..targetProto}, "ok")
-    sleep(2)
+    novaStatus({"JAM COMPLETE","",count.." packets sent","Target: "..targetProto}, "ok"); sleep(2)
 end
 
 -- ============================================================
@@ -618,56 +635,46 @@ end
 -- ============================================================
 local function impersonator()
     novaClear(); novaHeader("IMPERSONATOR")
-    local w = term.getSize()
-    term.setCursorPos(2, 5); term.setTextColor(PUR); term.write("Target facility secret: "); term.setTextColor(WHT)
-    local secret = read("*")
-    if not secret or secret == "" then return end
+    term.setCursorPos(2, 5); term.setTextColor(PUR); term.write("Target secret: "); term.setTextColor(WHT)
+    local secret = read("*"); if not secret or secret == "" then return end
     term.setCursorPos(2, 6); term.setTextColor(PUR); term.write("Target mainframe ID: "); term.setTextColor(WHT)
-    local mfId = tonumber(read())
-    if not mfId then return end
+    local mfId = tonumber(read()); if not mfId then return end
 
-    term.setCursorPos(2, 8); term.setTextColor(CYN)
-    term.write("Actions available with stolen secret:")
     local actions = {
-        {label="Send fake LOCKDOWN alert",    action="lockdown"},
-        {label="Send fake BREACH alert",      action="breach"},
-        {label="Send fake ALL CLEAR",         action="allclear"},
-        {label="Trigger sirens (breach)",      action="siren_breach"},
-        {label="Trigger sirens (panic)",       action="siren_panic"},
-        {label="Stop sirens",                  action="siren_off"},
-        {label="Send fake radio message",      action="radio"},
+        {label="Fake LOCKDOWN alert", action="lockdown"},
+        {label="Fake BREACH alert", action="breach"},
+        {label="Fake ALL CLEAR", action="allclear"},
+        {label="Trigger sirens (breach)", action="siren_breach"},
+        {label="Trigger sirens (panic)", action="siren_panic"},
+        {label="Stop sirens", action="siren_off"},
+        {label="Inject radio message", action="radio"},
     }
-
-    local idx, item = scrollList("IMPERSONATION // #"..mfId, actions, "ENTER=execute  Q=abort")
+    local idx, item = scrollList("IMPERSONATE // #"..mfId, actions, "ENTER=execute  Q=abort")
     if not idx then return end
 
-    -- Temporarily override the secret for sending
-    local origSecret = nil
+    -- Swap secret temporarily
+    local origSecret
     if fs.exists(proto.SECRET_PATH) then
         local f = fs.open(proto.SECRET_PATH, "r"); origSecret = f.readAll(); f.close()
     end
-    -- Write target secret temporarily
     local f = fs.open(proto.SECRET_PATH, "w"); f.write(secret); f.close()
 
     local act = item.action
     if act == "lockdown" then
         proto.send(nil, "facility_alert", {state="lockdown", zones={}, breaches={}})
-        novaStatus({"LOCKDOWN ALERT SENT", "", "Spoofed as facility broadcast"}, "ok")
+        novaStatus({"LOCKDOWN SPOOFED"}, "ok")
     elseif act == "breach" then
-        proto.send(nil, "facility_alert", {state="breach", zones={}, breaches={{scpId="???", zone="UNKNOWN"}}})
-        novaStatus({"BREACH ALERT SENT", "", "Phantom breach injected"}, "ok")
+        proto.send(nil, "facility_alert", {state="breach", zones={}, breaches={{scpId="???",zone="UNKNOWN"}}})
+        novaStatus({"BREACH INJECTED"}, "ok")
     elseif act == "allclear" then
         proto.send(nil, "facility_alert", {state="normal", zones={}, breaches={}})
-        novaStatus({"ALL CLEAR SENT", "", "Facility state spoofed to normal"}, "ok")
+        novaStatus({"ALL CLEAR SPOOFED"}, "ok")
     elseif act == "siren_breach" then
-        -- Need to know siren computer IDs; broadcast to all
-        rednet.broadcast({type="alarm_set", payload={pattern="breach"}, proto="CTN", sig="", nonce="", ts=0}, "CTN")
-        -- Actually use the proper proto.send
         proto.send(nil, "alarm_set", {pattern="breach"})
-        novaStatus({"SIREN TRIGGER SENT", "", "Breach pattern broadcast"}, "ok")
+        novaStatus({"SIRENS TRIGGERED"}, "ok")
     elseif act == "siren_panic" then
         proto.send(nil, "alarm_set", {pattern="panic"})
-        novaStatus({"PANIC SIREN SENT"}, "ok")
+        novaStatus({"PANIC SENT"}, "ok")
     elseif act == "siren_off" then
         proto.send(nil, "alarm_set", {pattern="off"})
         novaStatus({"SIRENS SILENCED"}, "ok")
@@ -678,255 +685,192 @@ local function impersonator()
         term.setCursorPos(2, 6); term.setTextColor(PUR); term.write("Message: "); term.setTextColor(WHT)
         local fakeMsg = read()
         proto.send(nil, "radio_broadcast", {from=fakeName, message=fakeMsg, channel="ALL", ts=os.epoch("utc")})
-        novaStatus({"RADIO INJECTED", "", "As: "..fakeName, fakeMsg:sub(1,30)}, "ok")
+        novaStatus({"RADIO INJECTED","","As: "..fakeName}, "ok")
     end
-
     sleep(2)
 
-    -- Restore original secret
+    -- Restore
     if origSecret then
         local f2 = fs.open(proto.SECRET_PATH, "w"); f2.write(origSecret); f2.close()
     end
 end
 
 -- ============================================================
--- Tool 7: Keylogger Terminal Mode
+-- Tool 7: Keylogger
 -- ============================================================
 local function keyloggerMode()
-    novaClear(); novaHeader("KEYLOGGER MODE")
-    local w, h = term.getSize()
-    term.setCursorPos(2, 5); term.setTextColor(RED)
-    term.write("This mode disguises this terminal as a")
-    term.setCursorPos(2, 6)
-    term.write("legitimate door scanner. When a card is")
-    term.setCursorPos(2, 7)
-    term.write("inserted, it logs the disk ID silently.")
-    term.setCursorPos(2, 9); term.setTextColor(PUR)
-    term.write("Door label to display: "); term.setTextColor(WHT)
-    local doorLabel = read()
-    if not doorLabel or doorLabel == "" then doorLabel = "SECTOR ACCESS" end
-
-    term.setCursorPos(2, 11); term.setTextColor(PUR)
-    term.write("Type DEPLOY to activate: "); term.setTextColor(WHT)
+    novaClear(); novaHeader("KEYLOGGER DEPLOY")
+    term.setCursorPos(2, 5); term.setTextColor(RED); term.write("Disguises as a door scanner.")
+    term.setCursorPos(2, 6); term.write("Captures card disk IDs silently.")
+    term.setCursorPos(2, 8); term.setTextColor(PUR); term.write("Door label: "); term.setTextColor(WHT)
+    local doorLabel = read(); if doorLabel == "" then doorLabel = "SECTOR ACCESS" end
+    term.setCursorPos(2, 10); term.setTextColor(PUR); term.write("Type DEPLOY: "); term.setTextColor(WHT)
     if read() ~= "DEPLOY" then return end
 
     local drive
     for _, side in ipairs(peripheral.getNames()) do
         if peripheral.getType(side) == "drive" then drive = peripheral.wrap(side); break end
     end
-    if not drive then
-        novaStatus({"NO DISK DRIVE", "", "Attach a drive to capture cards."}, "fail")
-        sleep(2); return
-    end
+    if not drive then novaStatus({"NO DISK DRIVE"}, "fail"); sleep(2); return end
 
     local stolen = {}
-
-    -- Disguise as legitimate door
     while true do
-        -- Show fake door idle screen
-        ui.bigStatus(term.current(), {doorLabel, "", ">>  INSERT ID CARD  <<", "", "Authorised personnel only."}, "idle")
-
+        -- Fake door idle
+        ui.bigStatus(term.current(), {doorLabel,"",">>  INSERT ID CARD  <<","","Authorised personnel only."}, "idle")
+        if monitor then
+            ui.bigStatus(monitor, {doorLabel,"",">>  INSERT ID CARD  <<","","Authorised personnel only."}, "idle")
+        end
         local evt = {os.pullEvent()}
         if evt[1] == "disk" then
             local diskID = drive.getDiskID()
             if diskID then
                 stolen[#stolen+1] = {diskID=diskID, ts=os.epoch("utc")}
-                -- Show fake "processing" then fake "error"
                 ui.bigStatus(term.current(), {"VERIFYING...","","Contacting mainframe"}, "working")
+                if monitor then ui.bigStatus(monitor, {"VERIFYING...","","Contacting mainframe"}, "working") end
                 sleep(math.random(10, 25) / 10)
-                ui.bigStatus(term.current(), {"MAINFRAME","UNREACHABLE","","Please try another terminal."}, "error")
+                ui.bigStatus(term.current(), {"MAINFRAME","UNREACHABLE","","Try another terminal."}, "error")
+                if monitor then ui.bigStatus(monitor, {"MAINFRAME","UNREACHABLE","","Try another terminal."}, "error") end
                 sleep(3)
-                -- Wait for disk removal
                 while drive.getDiskID() do sleep(0.3) end
             end
         elseif evt[1] == "key" and evt[2] == keys.f1 then
-            -- Secret exit: F1 returns to NOVA menu
-            -- Save stolen card data
             local f = fs.open("/.nova_stolen_cards", "w")
-            for _, s in ipairs(stolen) do
-                f.writeLine(textutils.serialize(s, {compact=true}))
-            end
+            for _, s in ipairs(stolen) do f.writeLine(textutils.serialize(s, {compact=true})) end
             f.close()
-            novaStatus({"KEYLOGGER STOPPED", "", #stolen.." card(s) captured", "Saved to /.nova_stolen_cards"}, "ok")
-            sleep(2)
-            return
+            novaStatus({"KEYLOGGER STOPPED","",#stolen.." card(s) captured"}, "ok"); sleep(2); return
         end
     end
 end
 
 -- ============================================================
--- Tool 8: Stolen Cards Viewer
+-- Tool 8: Stolen Cards
 -- ============================================================
 local function stolenCardsView()
     local cards = {}
     if fs.exists("/.nova_stolen_cards") then
         local f = fs.open("/.nova_stolen_cards", "r")
         while true do
-            local l = f.readLine()
-            if not l then break end
+            local l = f.readLine(); if not l then break end
             local ok, entry = pcall(textutils.unserialize, l)
             if ok and entry then cards[#cards+1] = entry end
-        end
-        f.close()
+        end; f.close()
     end
-    if #cards == 0 then
-        novaStatus({"NO STOLEN CARDS", "", "Deploy keylogger first."}, "info")
-        sleep(1.5); return
-    end
+    if #cards == 0 then novaStatus({"NO STOLEN CARDS","","Deploy keylogger first."}, "info"); sleep(1.5); return end
     local items = {}
     for _, c in ipairs(cards) do
-        local ts = os.date("%m/%d %H:%M", (c.ts or 0) / 1000)
-        items[#items+1] = {label = "DISK #"..c.diskID.."  captured "..ts, color=YEL}
+        items[#items+1] = {label="DISK #"..c.diskID.."  "..os.date("%m/%d %H:%M", (c.ts or 0)/1000), color=YEL}
     end
     scrollList("STOLEN CARDS // "..#cards, items)
 end
 
 -- ============================================================
--- Settings
+-- Settings + Purge
 -- ============================================================
 local function settings()
     novaClear(); novaHeader("SETTINGS")
-    local w = term.getSize()
-    term.setCursorPos(2, 5); term.setTextColor(PUR); term.write("Current callsign: "); term.setTextColor(WHT); term.write(CALLSIGN)
-    term.setCursorPos(2, 6); term.setTextColor(PUR); term.write("Current motto: "); term.setTextColor(GRY); term.write('"'..MOTTO..'"')
-    term.setCursorPos(2, 8); term.setTextColor(PUR); term.write("New callsign (blank=keep): "); term.setTextColor(WHT)
-    local newCS = read()
-    if newCS and newCS ~= "" then
-        CALLSIGN = newCS
-        myCfg.callsign = newCS
-    end
-    term.setCursorPos(2, 9); term.setTextColor(PUR); term.write("New motto (blank=keep): "); term.setTextColor(WHT)
-    local newMotto = read()
-    if newMotto and newMotto ~= "" then
-        MOTTO = newMotto
-        myCfg.motto = newMotto
-    end
-    -- Save config
-    local cfgMod = require("ctnconfig")
-    cfgMod.save(myCfg)
-    novaStatus({"SETTINGS SAVED"}, "ok")
-    sleep(1)
+    term.setCursorPos(2, 5); term.setTextColor(PUR); term.write("Callsign: "); term.setTextColor(WHT); term.write(CALLSIGN)
+    term.setCursorPos(2, 6); term.setTextColor(PUR); term.write("Motto: "); term.setTextColor(GRY); term.write('"'..MOTTO..'"')
+    term.setCursorPos(2, 8); term.setTextColor(PUR); term.write("New callsign: "); term.setTextColor(WHT)
+    local nc = read(); if nc ~= "" then CALLSIGN = nc; myCfg.callsign = nc end
+    term.setCursorPos(2, 9); term.setTextColor(PUR); term.write("New motto: "); term.setTextColor(WHT)
+    local nm = read(); if nm ~= "" then MOTTO = nm; myCfg.motto = nm end
+    require("ctnconfig").save(myCfg)
+    novaStatus({"SETTINGS SAVED"}, "ok"); sleep(1)
 end
 
--- ============================================================
--- Purge data
--- ============================================================
 local function purgeData()
     novaClear(); novaHeader("PURGE ALL DATA")
-    term.setCursorPos(2, 6); term.setTextColor(RED)
-    term.write("This will delete ALL captured data,")
-    term.setCursorPos(2, 7); term.write("stolen cards, and local files.")
-    term.setCursorPos(2, 9); term.setTextColor(PUR)
-    term.write("Type PURGE to confirm: "); term.setTextColor(WHT)
+    term.setCursorPos(2, 6); term.setTextColor(RED); term.write("Delete ALL captured data?")
+    term.setCursorPos(2, 8); term.setTextColor(PUR); term.write("Type PURGE: "); term.setTextColor(WHT)
     if read() ~= "PURGE" then return end
     captures = {}; knownHosts = {}; knownProtocols = {}
-    fs.delete("/.nova_captures")
-    fs.delete("/.nova_stolen_cards")
-    novaStatus({"DATA PURGED", "", "All evidence destroyed."}, "ok")
-    sleep(2)
+    fs.delete("/.nova_captures"); fs.delete("/.nova_stolen_cards")
+    novaStatus({"DATA PURGED","","All evidence destroyed."}, "ok"); sleep(2)
 end
 
 -- ============================================================
 -- Main menu
 -- ============================================================
 local menuItems = {
-    {label="Network Scanner",      action="scanner",   icon="[~]"},
-    {label="Host Intelligence",    action="hosts",     icon="[#]"},
-    {label="Protocol Analysis",    action="protocols", icon="[?]"},
-    {label="Capture Viewer",       action="captures",  icon="[>]"},
-    {label="Signal Jammer",        action="jammer",    icon="[!]"},
-    {label="Impersonator",         action="impersonate",icon="[*]"},
-    {label="Keylogger Deploy",     action="keylogger", icon="[@]"},
-    {label="Stolen Cards",         action="cards",     icon="[$]"},
-    {label="Settings",             action="settings",  icon="[=]"},
-    {label="Purge All Data",       action="purge",     icon="[X]"},
+    {label="Network Scanner",   action="scanner",    icon="[~]"},
+    {label="Host Intelligence", action="hosts",      icon="[#]"},
+    {label="Protocol Analysis", action="protocols",  icon="[?]"},
+    {label="Capture Viewer",    action="captures",   icon="[>]"},
+    {label="Signal Jammer",     action="jammer",     icon="[!]"},
+    {label="Impersonator",      action="impersonate", icon="[*]"},
+    {label="Keylogger Deploy",  action="keylogger",  icon="[@]"},
+    {label="Stolen Cards",      action="cards",      icon="[$]"},
+    {label="Settings",          action="settings",   icon="[=]"},
+    {label="Purge All Data",    action="purge",      icon="[X]"},
 }
 
 local ACTIONS = {
-    scanner     = scannerView,
-    hosts       = hostIntel,
-    protocols   = protocolAnalysis,
-    captures    = captureViewer,
-    jammer      = signalJammer,
-    impersonate = impersonator,
-    keylogger   = keyloggerMode,
-    cards       = stolenCardsView,
-    settings    = settings,
-    purge       = purgeData,
+    scanner=scannerView, hosts=hostIntel, protocols=protocolAnalysis,
+    captures=captureViewer, jammer=signalJammer, impersonate=impersonator,
+    keylogger=keyloggerMode, cards=stolenCardsView, settings=settings, purge=purgeData,
 }
 
 local function mainMenu()
     while true do
         novaClear()
         local w, h = term.getSize()
-
-        -- Header with animated eye
         term.setCursorPos(1, 1); term.setBackgroundColor(PUR); term.setTextColor(BLK)
         term.write(string.rep(" ", w))
         local title = "N.O.V.A // "..CALLSIGN
-        term.setCursorPos(math.max(1, math.floor((w - #title)/2)+1), 1); term.write(title)
+        term.setCursorPos(math.max(1, math.floor((w-#title)/2)+1), 1); term.write(title)
         term.setBackgroundColor(BLK)
-
-        -- Status line
         term.setCursorPos(1, 2); term.setTextColor(GRY)
-        local statusLine = " "..#captures.." captures  "..tblCount(knownHosts).." hosts  "..tblCount(knownProtocols).." protocols"
-        term.write(statusLine:sub(1, w))
+        local stats = " "..#captures.." cap  "..tblCount(knownHosts).." hosts  "..tblCount(knownProtocols).." proto"
+        term.write(stats:sub(1, w))
         term.setCursorPos(1, 3); term.setTextColor(PUR); term.write(string.rep("=", w))
 
-        -- Menu items with icons
-        local selected = 1
-        local top = 1
-        local rows = h - 6
+        -- Update monitor with idle feed
+        pcall(drawMonitorFeed)
 
+        local selected, top = 1, 1
+        local rows = h - 6
         while true do
             for row = 1, rows do
                 local idx = top + row - 1
                 local item = menuItems[idx]
-                local y = 3 + row
-                term.setCursorPos(1, y)
+                term.setCursorPos(1, 3 + row)
                 if not item then
                     term.setBackgroundColor(BLK); term.write(string.rep(" ", w))
                 elseif idx == selected then
                     term.setBackgroundColor(PUR); term.setTextColor(BLK)
                     local line = " "..item.icon.." "..item.label
-                    term.write(line:sub(1,w)); term.write(string.rep(" ", math.max(0, w - #line)))
+                    term.write(line:sub(1,w)); term.write(string.rep(" ", math.max(0, w-#line)))
                     term.setBackgroundColor(BLK)
                 else
                     term.setBackgroundColor(BLK); term.setTextColor(PUR)
                     local line = " "..item.icon.." "..item.label
-                    term.write(line:sub(1,w)); term.write(string.rep(" ", math.max(0, w - #line)))
+                    term.write(line:sub(1,w)); term.write(string.rep(" ", math.max(0, w-#line)))
                 end
             end
-
-            -- Motto at bottom
-            term.setCursorPos(1, h - 1); term.setTextColor(GRY)
-            local mottoLine = '"'..MOTTO..'"'
-            term.write(string.rep(" ", math.max(0, math.floor((w - #mottoLine)/2))))
-            term.write(mottoLine:sub(1, w))
-
+            term.setCursorPos(1, h-1); term.setTextColor(GRY)
+            local ml = '"'..MOTTO..'"'
+            term.write(string.rep(" ", math.max(0, math.floor((w-#ml)/2)))); term.write(ml:sub(1,w))
             novaFooter(os.date("%H:%M").."  N.O.V.A  "..CALLSIGN)
 
             local evt = {os.pullEvent()}
             if evt[1] == "key" then
                 if evt[2] == keys.up and selected > 1 then
-                    selected = selected - 1
-                    if selected < top then top = selected end
+                    selected = selected - 1; if selected < top then top = selected end
                 elseif evt[2] == keys.down and selected < #menuItems then
-                    selected = selected + 1
-                    if selected >= top + rows then top = top + 1 end
+                    selected = selected + 1; if selected >= top + rows then top = top + 1 end
                 elseif evt[2] == keys.enter then
                     local fn = ACTIONS[menuItems[selected].action]
-                    if fn then pcall(fn) end
-                    break
+                    if fn then pcall(fn) end; break
                 end
             elseif evt[1] == "mouse_click" then
                 local idx = top + (evt[4] - 4)
                 if idx >= 1 and idx <= #menuItems then
-                    selected = idx
-                    local fn = ACTIONS[menuItems[selected].action]
-                    if fn then pcall(fn) end
-                    break
+                    local fn = ACTIONS[menuItems[idx].action]; if fn then pcall(fn) end; break
                 end
+            elseif evt[1] == "rednet_message" then
+                -- Passive capture even from main menu
+                processCapture(evt[2], evt[3], evt[4])
+                pcall(drawMonitorFeed)
             end
         end
     end
