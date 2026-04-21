@@ -64,6 +64,7 @@ local ROLES = {
     action    = role({{src="terminals/action.lua",   dest="/startup.lua"}}),
     widget    = role({{src="terminals/widget.lua",   dest="/startup.lua"}}),
     pocket    = role({{src="terminals/pocket.lua",   dest="/startup.lua"}}),
+    nova      = role({{src="terminals/nova.lua",     dest="/startup.lua"}}),
 }
 
 -- ============================================================
@@ -116,7 +117,9 @@ elseif not role or not ROLES[role] then
     print("Usage: install <role>")
     print("       install update   (re-install using saved role)")
     print("Roles:")
-    for r in pairs(ROLES) do print("  - "..r) end
+    for r in pairs(ROLES) do
+        if r ~= "nova" then print("  - "..r) end
+    end
     return
 end
 
