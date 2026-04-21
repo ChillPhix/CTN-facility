@@ -253,7 +253,7 @@ function handlers.announce(from, payload)
     end
 
     db.addPending(from, pType, payload.hostname)
-    db.log("admin", "new terminal announced: "..pType, {from=from, hostname=payload.hostname})
+    db.logFrom("admin", "new terminal announced: "..pType, from, {hostname=payload.hostname})
     return {ok=true, pending=true, identity=ident}
 end
 
@@ -636,21 +636,21 @@ local facilityActions = {}
 
 facilityActions.zone_lockdown = function(args)
     db.setZoneLockdown(args.zone, true)
-    db.log("facility", "zone lockdown ON", {zone=args.zone, by=args.issuedBy})
+    db.logFrom("facility", "zone lockdown ON: "..args.zone, args._from, {zone=args.zone, by=args.issuedBy})
     pulseAlarms(args.zone, "lockdown")
     broadcastFacilityAlert()
 end
 
 facilityActions.zone_unlock = function(args)
     db.setZoneLockdown(args.zone, false)
-    db.log("facility", "zone lockdown OFF", {zone=args.zone, by=args.issuedBy})
+    db.logFrom("facility", "zone lockdown OFF: "..args.zone, args._from, {zone=args.zone, by=args.issuedBy})
     pulseAlarms(args.zone, "allclear")
     broadcastFacilityAlert()
 end
 
 facilityActions.set_state = function(args)
     db.setFacilityState(args.state)
-    db.log("facility", "facility state: "..args.state, {by=args.issuedBy})
+    db.logFrom("facility", "facility state: "..args.state, args._from, {by=args.issuedBy})
     if args.state == "breach" or args.state == "lockdown" then
         pulseAlarms(nil, "breach")
     elseif args.state == "normal" then
@@ -661,7 +661,7 @@ end
 
 facilityActions.declare_breach = function(args)
     db.declareBreach(args.scpId, args.zone, args.issuedBy)
-    db.log("facility", "BREACH: "..args.scpId.." in "..args.zone, {by=args.issuedBy})
+    db.logFrom("facility", "BREACH: "..args.scpId.." in "..args.zone, args._from, {by=args.issuedBy})
     db.setFacilityState("breach")
     db.setZoneLockdown(args.zone, true)
     pulseAlarms(nil, "breach")
@@ -673,7 +673,7 @@ end
 
 facilityActions.end_breach = function(args)
     db.endBreach(args.scpId)
-    db.log("facility", "breach contained: "..args.scpId, {by=args.issuedBy})
+    db.logFrom("facility", "breach contained: "..args.scpId, args._from, {by=args.issuedBy})
     db.setEntityStatus(args.scpId, "contained")
     local cid = db.getChamberByEntity(args.scpId)
     if cid then proto.send(cid, "chamber_alert", {status="contained"}) end
@@ -686,7 +686,7 @@ end
 
 facilityActions.set_entity_status = function(args)
     db.setEntityStatus(args.entityId, args.status)
-    db.log("facility", "entity status: "..args.entityId.." -> "..args.status, {by=args.issuedBy})
+    db.logFrom("facility", "entity status: "..args.entityId.." -> "..args.status, args._from, {by=args.issuedBy})
     local cid = db.getChamberByEntity(args.entityId)
     if cid then proto.send(cid, "chamber_alert", {status=args.status}) end
 end
@@ -699,14 +699,17 @@ end
 
 function handlers.facility_command(from, payload)
     if not db.checkPasscode("control", payload.passcode) then
-        db.log("security", "CONTROL: bad passcode", {from=from})
+        db.logFrom("security", "CONTROL: bad passcode", from, {attempted=payload.issuedBy or "?"})
         return {ok=false, reason="bad_passcode"}
     end
     local action = facilityActions[payload.action]
     if not action then return {ok=false, reason="unknown_action"} end
 
-    -- Some actions return data, others don't
-    local result = action(payload.args or {})
+    -- Inject from into args so facility actions can log it
+    local args = payload.args or {}
+    args._from = from
+
+    local result = action(args)
     if payload.action == "list_entities" then
         return {ok=true, entities=result}
     end
@@ -721,8 +724,19 @@ function handlers.status_request(from, payload)
         facility=data.facility,
         zones=data.zones,
         breaches=db.activeBreaches(),
-        recentLog=db.readLog(15),
+        recentLog=db.readLog(30),
         identity=db.getIdentity(),
+    }
+end
+
+-- Full log request: returns more entries with all metadata.
+-- Used by the fulllog widget and admin tools.
+function handlers.full_log_request(from, payload)
+    local count = payload and payload.count or 100
+    if count > 500 then count = 500 end
+    return {
+        ok=true,
+        entries=db.readLog(count),
     }
 end
 

@@ -375,8 +375,11 @@ function M.setDoorForced(doorName, forced)
 end
 
 function M.getDoorByTerminal(terminalId)
+    terminalId = tonumber(terminalId) or terminalId
     for name, d in pairs(data.doors) do
-        if d.terminalId == terminalId then return name, d end
+        if tonumber(d.terminalId) == terminalId or d.terminalId == terminalId then
+            return name, d
+        end
     end
     return nil
 end
@@ -843,21 +846,21 @@ end
 -- Alarm nodes
 -- ============================================================
 function M.addAlarm(computerId, zone)
-    data.alarms[computerId] = {zone=zone}
+    data.alarms[tonumber(computerId) or computerId] = {zone=zone}
     M.save()
 end
 
 function M.getAlarmsInZone(zone)
     local out = {}
     for id, a in pairs(data.alarms) do
-        if a.zone == zone then out[#out+1] = id end
+        if a.zone == zone then out[#out+1] = tonumber(id) or id end
     end
     return out
 end
 
 function M.allAlarms()
     local out = {}
-    for id, _ in pairs(data.alarms) do out[#out+1] = id end
+    for id, _ in pairs(data.alarms) do out[#out+1] = tonumber(id) or id end
     return out
 end
 
@@ -865,12 +868,13 @@ end
 -- Player detector nodes
 -- ============================================================
 function M.addDetector(computerId, zone)
-    data.detectors[computerId] = {zone=zone}
+    data.detectors[tonumber(computerId) or computerId] = {zone=zone}
     M.save()
 end
 
 function M.getDetectorZone(computerId)
-    local d = data.detectors[computerId]
+    computerId = tonumber(computerId) or computerId
+    local d = data.detectors[computerId] or data.detectors[tostring(computerId)]
     return d and d.zone or nil
 end
 
@@ -994,17 +998,20 @@ end
 -- Chamber terminals
 -- ============================================================
 function M.addChamber(computerId, entityId, zone)
+    computerId = tonumber(computerId) or computerId
     data.chambers[computerId] = {entityId=entityId, zone=zone}
     M.save()
 end
 
 function M.getChamber(computerId)
-    return data.chambers[computerId]
+    computerId = tonumber(computerId) or computerId
+    -- Try both number and string key (handles save/load type coercion)
+    return data.chambers[computerId] or data.chambers[tostring(computerId)]
 end
 
 function M.getChamberByEntity(entityId)
     for cid, c in pairs(data.chambers) do
-        if c.entityId == entityId then return cid, c end
+        if c.entityId == entityId then return tonumber(cid) or cid, c end
     end
     return nil
 end
@@ -1024,12 +1031,14 @@ end
 data.actions = data.actions or {}
 
 function M.addActionTerminal(computerId, zone, label)
+    computerId = tonumber(computerId) or computerId
     data.actions[computerId] = {zone=zone, label=label or ("action-"..computerId)}
     M.save()
 end
 
 function M.getActionTerminal(computerId)
-    return data.actions[computerId]
+    computerId = tonumber(computerId) or computerId
+    return data.actions[computerId] or data.actions[tostring(computerId)]
 end
 
 function M.listActionTerminals()

@@ -25,7 +25,7 @@ local gpu   = require("ctngpu")
 local myCfg = cfg.loadOrWizard("widget", {
     {key="mainframe_id", prompt="Mainframe computer ID", type="number", default=1},
     {key="widget_type", prompt="Which widget to display",
-     type="pick", options={"breaches","zones","entities","log","personnel","clock","state"},
+     type="pick", options={"breaches","zones","entities","log","fulllog","personnel","clock","state"},
      default="state"},
 })
 
@@ -295,11 +295,103 @@ local function drawEntities(be)
     be:update()
 end
 
+-- Full detailed log: every entry with computer ID, terminal name, zone, category
+local fullLogCache = {}
+local fullLogLastFetch = 0
+
+local function drawFullLog(be)
+    local w, h = be:size()
+    be:clear(gpu.COLORS.bg)
+
+    -- Fetch full log every 3 seconds
+    if os.epoch("utc") - fullLogLastFetch > 3000 then
+        local reply = proto.request(MAINFRAME, "full_log_request", {count=200}, 3)
+        if reply and reply.ok and reply.entries then
+            fullLogCache = reply.entries
+        end
+        fullLogLastFetch = os.epoch("utc")
+    end
+
+    if be.mode == "gpu" then
+        local p = gpu.panel(be, 4, 4, w-8, h-8, "FULL SECURITY LOG", "normal")
+        local y = p.contentY + 2
+        local rowH = 11
+        local maxRows = math.floor((p.h - 10) / rowH)
+        local start = math.max(1, #fullLogCache - maxRows + 1)
+        for i = start, #fullLogCache do
+            if y > p.y + p.h - 10 then break end
+            local e = fullLogCache[i]
+            if e then
+                local ts = os.date("%H:%M:%S", (e.ts or 0) / 1000)
+                local catCol = ({
+                    security=gpu.COLORS.err, access=gpu.COLORS.warn,
+                    admin=gpu.COLORS.ok, facility=gpu.COLORS.accent2,
+                    mail=gpu.COLORS.accent, radio=gpu.COLORS.accent,
+                    docs=gpu.COLORS.fg, error=gpu.COLORS.err,
+                })[e.category] or gpu.COLORS.fg
+
+                -- Time
+                be:text(p.x + 4, y, ts, gpu.COLORS.dim, 9, "plain")
+                -- Category
+                be:text(p.x + 64, y, ("["..((e.category or "?"):upper()).."]"):sub(1,12), catCol, 9, "bold")
+                -- Computer ID + terminal
+                local src = ""
+                if e.meta then
+                    if e.meta.from then src = "#"..tostring(e.meta.from) end
+                    if e.meta.terminal_name then src = src.." "..e.meta.terminal_name end
+                    if e.meta.zone then src = src.." @"..e.meta.zone end
+                end
+                if src ~= "" then
+                    be:text(p.x + 140, y, src:sub(1, 25), gpu.COLORS.dim, 8, "plain")
+                end
+                -- Message
+                local msg = (e.message or ""):sub(1, math.floor((p.w - 320) / 5))
+                be:text(p.x + 310, y, msg, gpu.COLORS.fg, 9, "plain")
+
+                y = y + rowH
+            end
+        end
+    else
+        local p = gpu.panel(be, 1, 1, w, h, "FULL LOG", "normal")
+        local y = p.contentY
+        local maxRows = p.h - 3
+        local start = math.max(1, #fullLogCache - maxRows + 1)
+        for i = start, #fullLogCache do
+            if y > p.y + p.h - 2 then break end
+            local e = fullLogCache[i]
+            if e then
+                local ts = os.date("%H:%M", (e.ts or 0) / 1000)
+                local catCol = ({
+                    security=gpu.COLORS.err, access=gpu.COLORS.warn,
+                    admin=gpu.COLORS.ok, facility=gpu.COLORS.accent2,
+                    mail=gpu.COLORS.accent, docs=gpu.COLORS.fg, error=gpu.COLORS.err,
+                })[e.category] or gpu.COLORS.fg
+
+                -- Compact: time cat #ID message
+                local src = ""
+                if e.meta and e.meta.from then src = "#"..tostring(e.meta.from) end
+                if e.meta and e.meta.terminal_name then
+                    src = src.." "..tostring(e.meta.terminal_name):sub(1,8)
+                end
+                local cat = (e.category or "?"):sub(1,4):upper()
+                local msg = (e.message or ""):sub(1, w - #ts - #cat - #src - 8)
+                be:text(p.x + 1, y, ts, gpu.COLORS.dim)
+                be:text(p.x + 7, y, cat, catCol)
+                be:text(p.x + 12, y, src, gpu.COLORS.dim)
+                be:text(p.x + 12 + #src + 1, y, msg, gpu.COLORS.fg)
+                y = y + 1
+            end
+        end
+    end
+    be:update()
+end
+
 local RENDERERS = {
     state = drawState,
     breaches = drawBreaches,
     zones = drawZones,
     log = drawLog,
+    fulllog = drawFullLog,
     clock = drawClock,
     personnel = drawPersonnel,
     entities = drawEntities,
