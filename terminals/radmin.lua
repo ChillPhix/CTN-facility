@@ -16,18 +16,6 @@ ui.bootIdentity()
 local MAINFRAME = myCfg.mainframe_id
 
 local DEPARTMENTS = {"Security","Research","MTF","Medical","Admin","Janitor","Guest","Ethics","Director"}
-local function getZones()
-    local r = sendAdmin("list_zones", {})
-    local zones = {}
-    if type(r) == "table" then
-        for _, z in ipairs(r) do
-            if type(z) == "table" and z.name then zones[#zones+1] = z.name end
-        end
-    end
-    table.sort(zones)
-    if #zones == 0 then zones = {"(no zones)"} end
-    return zones
-end
 local CLASSES = {"Safe","Euclid","Keter","Thaumiel","Apollyon","Neutralized"}
 local ENTITY_STATUSES = {"contained","breached","testing","maintenance","decommissioned","deceased"}
 
@@ -43,6 +31,19 @@ local function sendAdmin(action, args)
         action = action,
         args = args or {},
     }, 5)
+end
+
+local function getZones()
+    local r = sendAdmin("list_zones", {})
+    local zones = {}
+    if type(r) == "table" then
+        for _, z in ipairs(r) do
+            if type(z) == "table" and z.name then zones[#zones+1] = z.name end
+        end
+    end
+    table.sort(zones)
+    if #zones == 0 then zones = {"(no zones)"} end
+    return zones
 end
 
 -- ============================================================
