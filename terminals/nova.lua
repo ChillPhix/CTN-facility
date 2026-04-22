@@ -1094,6 +1094,73 @@ local function purgeData()
     novaStatus({"ALL DATA PURGED","","Evidence destroyed."}, "ok"); sleep(2)
 end
 
+-- Payload deployer: write takeover script to floppy
+local function deployPayload()
+    if not drive then novaStatus({"NO DISK DRIVE","","Attach a drive."}, "fail"); sleep(1.5); return end
+    novaClear(); novaHeader(nil, "PAYLOAD DEPLOYER")
+
+    term.setCursorPos(2, 5); term.setTextColor(PUR); term.write("This creates a takeover floppy.")
+    term.setCursorPos(2, 6); term.setTextColor(GRY); term.write("Insert into target computer to seize it.")
+    term.setCursorPos(2, 8); term.setTextColor(PUR); term.write("Custom motto (blank=default): ")
+    term.setTextColor(WHT); local pmotto = read()
+    if pmotto == "" then pmotto = MOTTO end
+    term.setCursorPos(2, 9); term.setTextColor(PUR); term.write("Custom callsign (blank=default): ")
+    term.setTextColor(WHT); local pcall_ = read()
+    if pcall_ == "" then pcall_ = CALLSIGN end
+
+    term.setCursorPos(2, 11); term.setTextColor(YEL); term.write("Insert blank floppy disk...")
+    while not drive.getDiskID() do
+        local evt = {os.pullEvent()}
+        if evt[1] == "key" and evt[2] == keys.q then return end
+    end
+
+    local mount = drive.getMountPath()
+    if not mount or mount == "" then
+        novaStatus({"MOUNT ERROR"}, "fail"); sleep(1.5); return
+    end
+
+    -- Read the takeover payload from our own lib
+    local payloadSrc
+    if fs.exists("/lib/secret-takeover.lua") then
+        local f = fs.open("/lib/secret-takeover.lua", "r")
+        payloadSrc = f.readAll(); f.close()
+    else
+        novaStatus({"PAYLOAD NOT FOUND","","Missing /lib/secret-takeover.lua"}, "fail")
+        sleep(2); return
+    end
+
+    -- Write payload as startup.lua on the floppy
+    local f = fs.open(mount.."/startup.lua", "w")
+    f.write(payloadSrc); f.close()
+
+    -- Write config with motto/callsign
+    local f2 = fs.open(mount.."/.nova_payload_cfg", "w")
+    f2.write(textutils.serialize({motto=pmotto, callsign=pcall_}))
+    f2.close()
+
+    -- Set disk label to something innocent
+    pcall(drive.setDiskLabel, "System Update")
+
+    novaStatus({
+        "PAYLOAD ARMED",
+        "",
+        "Floppy is ready.",
+        "Label: 'System Update'",
+        "",
+        "HOW TO DEPLOY:",
+        "1. Put floppy in target's drive",
+        "2. Target reboots or starts up",
+        "3. Payload runs from floppy",
+        "",
+        "OR for permanent takeover:",
+        "1. Access target computer",
+        "2. Copy floppy startup.lua to",
+        "   target's /startup.lua",
+        "3. Remove floppy, reboot target",
+    }, "ok")
+    os.pullEvent("key")
+end
+
 -- ============================================================
 -- Main menu
 -- ============================================================
@@ -1107,6 +1174,7 @@ local menuItems = {
     {label="Impersonator",             action=impersonator,      icon="[*]"},
     {label="Disk Cloner",              action=diskCloner,        icon="[$]"},
     {label="Keylogger Deploy",         action=keyloggerMode,     icon="[@]"},
+    {label="Payload Deploy",           action=deployPayload,     icon="[!]"},
     {label="Stolen Cards",             action=stolenCardsView,   icon="[&]"},
     {label="Settings",                 action=settings,          icon="[=]"},
     {label="Purge All Data",           action=purgeData,         icon="[X]"},
